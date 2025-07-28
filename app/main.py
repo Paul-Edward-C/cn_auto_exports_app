@@ -12,6 +12,9 @@ from bokeh.models import (
 from bokeh.plotting import figure
 from bokeh.layouts import column, row
 from bokeh.themes import Theme
+import os
+
+
 
 # --- 1. Use the econ-db palette and theme ---
 custom_palette = [
@@ -28,7 +31,7 @@ china_color = "#8B3A3A"  # Rustic Red
 
 curdoc().theme = Theme(json={
     'attrs': {
-        'Figure': {
+        'figure': {
             'background_fill_color': '#228B22',
             'background_fill_alpha': 0.05
         },
@@ -51,8 +54,12 @@ curdoc().theme = Theme(json={
 })
 
 # --- 2. Load map and data ---
-world = gpd.read_file('data/ne_10m_admin_0_countries.shp')
-df = df = pd.read_csv('data/auto_total.csv')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+shapefile_path = os.path.join(BASE_DIR, 'data', 'ne_10m_admin_0_countries.shp')
+csv_path = os.path.join(BASE_DIR, 'data', 'auto_total.csv')
+
+world = gpd.read_file(shapefile_path)
+df = pd.read_csv(csv_path)
 
 # --- 3. Map country names to DataFrame columns ---
 country_type_to_col = {}
@@ -127,7 +134,7 @@ geo_source = GeoJSONDataSource(geojson=filtered_world.to_json())
 # --- 7. Bokeh plot ---
 TOOLS = "pan,wheel_zoom,box_zoom,reset,hover,save"
 p = figure(
-    title=f"Automobile Exports by Country ({default_type}, USD m, log scale)",
+    title=f"China, Automobile Exports by Country, {default_type}, USD m",
     tools=TOOLS,
     x_axis_location=None, y_axis_location=None,
     active_scroll='wheel_zoom',
@@ -137,7 +144,7 @@ p.grid.grid_line_color = None
 
 color_mapper_obj = LinearColorMapper(palette=custom_palette, low=exports_log_min, high=exports_log_max, nan_color="#dddddd")
 color_bar = ColorBar(color_mapper=color_mapper_obj, label_standoff=12, location=(0,0),
-                     title=f"Exports ({default_type}, USD m, log scale)")
+                     title=f"Exports, {default_type}, USD m, log scale")
 p.add_layout(color_bar, 'right')
 
 patches = p.patches(
@@ -260,4 +267,4 @@ layout = column(
 )
 
 curdoc().add_root(layout)
-curdoc().title = "Automobile Exports World Map"
+curdoc().title = "China, Automobile Exports World Map"
