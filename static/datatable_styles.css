@@ -1,0 +1,29 @@
+.slick-column-name {
+    font-family: Georgia;
+    font-weight: 900;
+    font-size: 0.9rem;
+    word-wrap: break-word;
+    white-space: normal;
+    margin: inherit;
+}
+.slick-sort-indicator {
+    margin: inherit;
+}
+
+.slick-header-column {
+    background-color: hsla(120, 100%, 25%, 0.1) !important;
+    word-wrap: break-word;
+}
+
+.slick-cell {
+    font-family: Georgia;
+    font-size: 0.9rem;
+}
+
+.slick-row:nth-of-type(even) {
+    background-color: hsla(120, 100%, 25%, 0.1) !important;
+}
+
+.ui-state-default.slick-header-column.slick-header-sortable {
+    height: fit-content;
+}

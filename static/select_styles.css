@@ -1,0 +1,22 @@
+.bk-input-group{
+    font-size: 1.1rem;
+    font-family: Georgia;
+#    background-color: hsla(120,100%,25%,0.2);
+    font-weight: 900;
+    color: black;
+}
+
+.bk-input{
+    font-size: 0.9rem;
+    font-family: Georgia;
+    background-color: hsla(120,100%,25%,0.1);
+#    font-weight: 900;
+    color: black;
+}
+
+.choices__item.solid.choices__item--selectable{
+    font-size: 0.9rem;
+    font-family: Georgia;
+    background: #104b1f;
+ #   font-weight: 900;
+}
