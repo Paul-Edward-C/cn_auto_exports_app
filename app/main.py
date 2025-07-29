@@ -13,6 +13,35 @@ from bokeh.models import (
 )
 from bokeh.plotting import figure
 from bokeh.layouts import column, row
+from bokeh.themes import Theme
+
+# --- Theme settings ---
+theme_json = {
+    'attrs': {
+        'figure': {
+            'background_fill_color': '#228B22',
+            'background_fill_alpha': 0.05,
+        },
+        'Axis': {
+            'axis_label_text_font': 'Georgia',
+            'major_label_text_font': 'Georgia',
+        },
+        'Title': {
+            'text_font_style': 'bold',
+            'text_font': 'Georgia',
+            'text_font_size': '18px',
+        },
+        'Legend': {
+            'label_text_font': 'Georgia',
+            'padding': 1,
+            'spacing': 1,
+            'background_fill_alpha': 0.7,
+        },
+    }
+}
+
+curdoc().theme = Theme(json=theme_json)
+
 
 # --- 1. Palette ---
 blues = [
@@ -294,6 +323,12 @@ def update_div(attr, old, new):
 
 #selected_table_source.on_change('data', update_div)
 
+columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
+filtered_world_small = filtered_world[columns_to_keep]
+geo_source = GeoJSONDataSource(geojson=filtered_world_small.to_json())
+
+# --- When updating geo_source elsewhere (e.g., in update_map_type, highlight_top15, reset_top15), also use filtered_world_small ---
+
 def update_map_type(attr, old, new):
     exp_type = select_type.value
     value_type = select_value_type.value
@@ -320,7 +355,12 @@ def update_map_type(attr, old, new):
     exports_log = filtered_world["exports_log"].values
     filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, exports_log_min, exports_log_max)
     filtered_world.loc[filtered_world["ADMIN"] == "China", "custom_color"] = china_color
-    geo_source.geojson = filtered_world.to_json()
+
+    # PATCH: Only keep needed columns for GeoJSON
+    columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
+    filtered_world_small = filtered_world[columns_to_keep]
+    geo_source.geojson = filtered_world_small.to_json()
+
     p.title.text = f"Automobile Exports by Country ({exp_type}, {value_type})"
     data_table.columns = make_data_table_columns(exp_type, value_type)
     color_mapper_obj.low = exports_log_min
@@ -329,9 +369,6 @@ def update_map_type(attr, old, new):
     top15_table_source.data = dict(country=[], value=[])
     top15_chart_source.data = dict(country=[], value=[])
     top15_chart.x_range.factors = []
-
-select_type.on_change('value', update_map_type)
-select_value_type.on_change('value', update_map_type)
 
 def highlight_top15():
     exp_type = select_type.value
@@ -358,7 +395,11 @@ def highlight_top15():
     exports_log_max = filtered_world["exports_log"].max()
     filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, exports_log_min, exports_log_max, highlight_admins=top_admins)
     filtered_world.loc[filtered_world["ADMIN"] == "China", "custom_color"] = china_color
-    geo_source.geojson = filtered_world.to_json()
+
+    # PATCH: Only keep needed columns for GeoJSON
+    columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
+    filtered_world_small = filtered_world[columns_to_keep]
+    geo_source.geojson = filtered_world_small.to_json()
 
     # Update top 15 table and chart
     top15_data = filtered_world.iloc[top15_idx][["ADMIN", "exports"]]
@@ -372,6 +413,24 @@ def highlight_top15():
         value=top15_data_sorted["exports"].tolist(),
     )
     top15_chart.x_range.factors = top15_data_sorted["ADMIN"].tolist()
+
+def reset_top15():
+    # Restore the map coloring
+    exports_log_min = filtered_world["exports_log"].min()
+    exports_log_max = filtered_world["exports_log"].max()
+    exports_log = filtered_world["exports_log"].values
+    filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, exports_log_min, exports_log_max)
+    filtered_world.loc[filtered_world["ADMIN"] == "China", "custom_color"] = china_color
+
+    # PATCH: Only keep needed columns for GeoJSON
+    columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
+    filtered_world_small = filtered_world[columns_to_keep]
+    geo_source.geojson = filtered_world_small.to_json()
+
+    # Clear the top 15 table and chart
+    top15_table_source.data = dict(country=[], value=[])
+    top15_chart_source.data = dict(country=[], value=[])
+    top15_chart.x_range.factors = []
 
 top15_button.on_click(highlight_top15)
 
