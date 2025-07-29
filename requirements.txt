@@ -44,3 +44,4 @@ typing_extensions==4.7.1
 virtualenv==20.23.1
 xyzservices==2023.5.0
 geopandas==0.14.3
+matplotlib==3.8.4
