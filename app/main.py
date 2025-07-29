@@ -171,9 +171,10 @@ hover = p.select_one(HoverTool)
 hover.point_policy = "follow_mouse"
 hover.tooltips = [
     ("Country", "@ADMIN"),
-    (f"Exports ({default_value_type})", "@exports"),
+    (f"Exports ({default_value_type})", "@exports{0,0.0}"),
     ("Note", "@note")
 ]
+
 
 select_country = Select(title="Select Country", value="", options=sorted(list(admin_to_df_map.keys())), width=220)
 select_type = Select(title="Export Type", value=default_type, options=export_types, width=220)
