@@ -238,18 +238,30 @@ def reset_top15():
 
 reset_button.on_click(reset_top15)
 
+
+
 # --- Top 15 Table ---
+
+country_width = 250
+date_width=200
+cat_width = 350
+
+top_15_width = country_width +cat_width
+total_width = date_width + cat_width
+
 top15_table_source = ColumnDataSource(data=dict(country=[], value=[]))
 top15_table = DataTable(
     source=top15_table_source,
     columns=[
-        TableColumn(field="country", title="Country", width=200),
-        TableColumn(field="value", title=f"Exports ({default_value_type})", width=150, formatter=formatter)
+        TableColumn(field="country", title="Country", width=country_width),
+        TableColumn(field="value", title=f"Exports ({default_type}, {default_value_type})", width=cat_width, formatter=formatter)
     ],
-    width=370,
+    width=top_15_width,
     height=350,
     index_position=None,
 )
+
+
 
 # --- Top 15 Chart (Bar) ---
 top15_chart_source = ColumnDataSource(data=dict(country=[], value=[]))
@@ -260,6 +272,7 @@ top15_chart = figure(
 top15_chart.vbar(x="country", top="value", source=top15_chart_source, width=0.7, color="#556B2F",alpha=0.7)
 top15_chart.xaxis.major_label_orientation = 1.0
 top15_chart.xgrid.grid_line_color = None
+top15_chart.title.text_font_size = "14px"
 #top15_chart.yaxis.axis_label = f"Exports ({default_value_type})"
 
 # --- DataTable styling ---
@@ -455,21 +468,28 @@ style = """
 """
 style_div = Div(text=style)
 
-# --- Controls layout ---
-selectors_row = row(
-    column(select_country, width=220, sizing_mode="fixed"),
-    column(select_type, width=220, sizing_mode="fixed"),
-    column(select_value_type, width=220, sizing_mode="fixed"),
+# --- Controls ---
+select_type = Select(title="Export Type", value=default_type, options=export_types, width=220)
+select_value_type = Select(title="Value Type", value=default_value_type, options=value_types, width=220)
+select_country = Select(title="Select Country", value="", options=sorted(list(admin_to_df_map.keys())), width=220)
+
+# --- Layout: Top type/value selectors, map/chart/table, bottom country selector ---
+top_selectors_row = row(
+    select_type,
+    select_value_type,
+    sizing_mode="fixed"
+)
+bottom_selector_row = row(
+    select_country,
     sizing_mode="fixed"
 )
 
-# --- Top 15 column (button, chart, table stacked vertically) ---
+# --- Main row: map + top 15 chart/table/buttons ---
 top15_buttons_row = row(
     top15_button,
     reset_button,
     sizing_mode="fixed"
 )
-
 top15_col = column(
     top15_buttons_row,
     top15_chart,
@@ -477,23 +497,64 @@ top15_col = column(
     sizing_mode="fixed",
     width=370
 )
-
-# --- Main row: map on left, highlight chart/table/button on right ---
 main_row = row(
     p,
     top15_col,
     sizing_mode="stretch_width",
-    height=520   # set height equal to map height for tight layout
+    height=520
 )
 
 layout = column(
-    style_div,
-    main_row,         # map and top 15 to right
-    selectors_row,    # selectors directly below map
-    selected_div,
-    data_table,
+    style_div,           # custom CSS
+    top_selectors_row,   # <-- type/value selectors at top
+    main_row,            # map, chart, table
+    bottom_selector_row, # <-- country selector at bottom
+    selected_div,        # country info div
+    data_table,          # time series table
     sizing_mode="stretch_width"
 )
-
 curdoc().add_root(layout)
+
+# --- Callback updates for dynamic titles ---
+def update_selected(attr, old, new):
+    country = select_country.value
+    exp_type = select_type.value
+    value_type = select_value_type.value
+    df_country = admin_to_df_map.get(country)
+    df_col = country_type_value_to_col.get(df_country, {}).get(exp_type, {}).get(value_type)
+    if df_col and df_col in df.columns:
+        last_24 = df.tail(24)
+        if date_col and date_col in df.columns:
+            dates = last_24[date_col].tolist()
+        else:
+            dates = last_24.index.tolist()
+        exports = last_24[df_col].apply(lambda x: round(x,1) if pd.notnull(x) else None).tolist()
+        selected_table_source.data = dict(
+            index=list(range(len(dates))),
+            date=dates,
+            exports=exports
+        )
+    else:
+        selected_table_source.data = dict(index=[], date=[], exports=[])
+
+def update_titles_and_map(attr, old, new):
+    exp_type = select_type.value
+    value_type = select_value_type.value
+    p.title.text = f"Automobile Exports by Country ({exp_type}, {value_type})"
+    top15_chart.title.text = f"Top 15 destinations, {exp_type}, {value_type}"
+    color_bar.title = f"Exports ({exp_type}, {value_type})"
+    data_table.columns = make_data_table_columns(exp_type, value_type)
+    # --- PATCH: update top15_table header too ---
+    top15_table.columns = [
+        TableColumn(field="country", title="Country", width=200),
+        TableColumn(field="value", title=f"Exports ({exp_type}, {value_type})", width=150, formatter=formatter)
+    ]
+    update_map_type(attr, old, new)  # update map coloring and data
+
+select_type.on_change('value', update_titles_and_map)
+select_value_type.on_change('value', update_titles_and_map)
+select_country.on_change('value', update_selected)
+select_type.on_change('value', update_selected)
+select_value_type.on_change('value', update_selected)
+
 curdoc().title = "China, Auto Exports"
