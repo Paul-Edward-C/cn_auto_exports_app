@@ -8,8 +8,8 @@ import re
 
 from bokeh.io import curdoc
 from bokeh.models import (
-    GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div,
-    DataTable, TableColumn, HTMLTemplateFormatter, ColorBar, LinearColorMapper
+    GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div,Label,
+    DataTable, TableColumn, HTMLTemplateFormatter, ColorBar, LinearColorMapper, NumberFormatter
 )
 from bokeh.plotting import figure
 from bokeh.layouts import column, row
@@ -50,13 +50,10 @@ greens = [
     "#c7e9c0", "#a1d99b", "#74c476", "#41ab5d", "#238b45", "#006d2c", "#00441b"
 ]
 palette = blues[::-1] + greens
-
 def interpolate_palette(palette, n):
     cmap = mcolors.LinearSegmentedColormap.from_list('custom', palette)
     return [mcolors.to_hex(cmap(i/(n-1))) for i in range(n)]
-
 smooth_palette = interpolate_palette(palette, 50)
-china_color = "#dddddd"
 
 formatter = HTMLTemplateFormatter(
     template="""
@@ -149,6 +146,7 @@ filtered_world["note"] = filtered_world["exports"].apply(
 )
 filtered_world.loc[filtered_world["ADMIN"] == "China", "note"] = "Exporter (no data)"
 
+# --- 6. Apply color mapping ---
 def get_colors(export_values, palette, vmin, vmax, highlight_admins=None):
     export_values = np.array(export_values, dtype=float)
     norm = (export_values - vmin) / (vmax - vmin) if (vmax - vmin) != 0 else np.zeros_like(export_values)
@@ -158,7 +156,7 @@ def get_colors(export_values, palette, vmin, vmax, highlight_admins=None):
     for admin, v, i in zip(filtered_world["ADMIN"], export_values, idx):
         if np.isnan(v):
             colors.append("#dddddd")
-        elif highlight_admins is not None and admin not in highlight_admins and admin != "China":
+        elif highlight_admins is not None and admin not in highlight_admins:
             colors.append("#dddddd")
         else:
             colors.append(palette[i])
@@ -168,7 +166,6 @@ exports_log_min = filtered_world["exports_log"].min()
 exports_log_max = filtered_world["exports_log"].max()
 exports_log = filtered_world["exports_log"].values
 filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, exports_log_min, exports_log_max)
-filtered_world.loc[filtered_world["ADMIN"] == "China", "custom_color"] = china_color
 
 columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
 filtered_world_small = filtered_world[columns_to_keep]
@@ -190,6 +187,11 @@ color_bar = ColorBar(color_mapper=color_mapper_obj, label_standoff=12, location=
                      title=f"Exports {default_type}, {default_value_type}")
 p.add_layout(color_bar, 'right')
 
+p.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen',
+                    text=f"www.eastasiaecon.com/cn/#charts"))
+
+p.xaxis.axis_label = f'Source: CCA, EEA'
+
 patches = p.patches(
     'xs', 'ys', source=geo_source,
     fill_color='custom_color',
@@ -209,7 +211,6 @@ select_country = Select(title="Select Country", value="", options=sorted(list(ad
 select_type = Select(title="Export Type", value=default_type, options=export_types, width=220)
 select_value_type = Select(title="Value Type", value=default_value_type, options=value_types, width=220)
 
-# --- Custom styled button ---
 top15_button = Button(label="Highlight Top 15", button_type="success", width=220, height=35)
 top15_button.css_classes = ["styled-btn"]
 
@@ -221,10 +222,24 @@ reset_button = Button(
     css_classes=["styled-btn", "reset-btn"]
 )
 
-# --- Top 15 Table ---
+def reset_top15():
+    exports_log_min = filtered_world["exports_log"].min()
+    exports_log_max = filtered_world["exports_log"].max()
+    exports_log = filtered_world["exports_log"].values
+    filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, exports_log_min, exports_log_max)
+    columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
+    filtered_world_small = filtered_world[columns_to_keep]
+    geo_source.geojson = filtered_world_small.to_json()
+    top15_table_source.data = dict(country=[], value=[])
+    top15_chart_source.data = dict(country=[], value=[])
+    top15_chart.x_range.factors = []
+
+reset_button.on_click(reset_top15)
+
 country_width = 250
 date_width = 200
 cat_width = 350
+
 top_15_width = country_width + cat_width
 total_width = date_width + cat_width
 
@@ -240,7 +255,6 @@ top15_table = DataTable(
     index_position=None,
 )
 
-# --- Top 15 Chart (Bar) ---
 top15_chart_source = ColumnDataSource(data=dict(country=[], value=[]))
 top15_chart = figure(
     x_range=[], height=350, width=370, title=f"Top 15 destinations, {default_type}, {default_value_type}", toolbar_location=None, tools="",
@@ -251,7 +265,6 @@ top15_chart.xaxis.major_label_orientation = 1.0
 top15_chart.xgrid.grid_line_color = None
 top15_chart.title.text_font_size = "14px"
 
-# --- DataTable styling ---
 selected_table_source = ColumnDataSource(data=dict(index=[], date=[], exports=[]))
 
 date_col = None
@@ -295,10 +308,16 @@ select_type.on_change('value', update_selected)
 select_value_type.on_change('value', update_selected)
 
 selected_div = Div(text="")
-
-columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
-filtered_world_small = filtered_world[columns_to_keep]
-geo_source = GeoJSONDataSource(geojson=filtered_world_small.to_json())
+def update_div(attr, old, new):
+    if selected_table_source.data['exports']:
+        latest_export = selected_table_source.data['exports'][-1]
+        country = select_country.value
+        exp_type = select_type.value
+        value_type = select_value_type.value
+        latest_val = f"{latest_export:.1f}" if latest_export is not None else 'N/A'
+        selected_div.text = f"<h2>{country}, {exp_type}, {value_type}</h2><p>Latest Exports: {latest_val}</p>"
+    else:
+        selected_div.text = ""
 
 def update_map_type(attr, old, new):
     exp_type = select_type.value
@@ -325,8 +344,6 @@ def update_map_type(attr, old, new):
     exports_log_max = filtered_world["exports_log"].max()
     exports_log = filtered_world["exports_log"].values
     filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, exports_log_min, exports_log_max)
-    filtered_world.loc[filtered_world["ADMIN"] == "China", "custom_color"] = china_color
-
     columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
     filtered_world_small = filtered_world[columns_to_keep]
     geo_source.geojson = filtered_world_small.to_json()
@@ -340,7 +357,7 @@ def update_map_type(attr, old, new):
     top15_chart_source.data = dict(country=[], value=[])
     top15_chart.x_range.factors = []
 
-# --- FIXED: Only top 15 colored, all others grey except China ---
+# --- Highlight Top 15: ONLY top 15 get palette, ALL others (including China) are grey ---
 def highlight_top15():
     exp_type = select_type.value
     value_type = select_value_type.value
@@ -364,15 +381,13 @@ def highlight_top15():
     valid_exports = exports_log[~exports_log.isna()]
     top15 = valid_exports.nlargest(15)
     top_admins = set(filtered_world.loc[top15.index, "ADMIN"])
-    exports_log_min = top15.min()  # Only top 15 min/max for palette scaling
+    exports_log_min = top15.min()
     exports_log_max = top15.max()
 
     def color_row(row):
         admin = row["ADMIN"]
         v = row["exports_log"]
-        if admin == "China":
-            return china_color
-        elif admin in top_admins and pd.notnull(v):
+        if admin in top_admins and pd.notnull(v):
             norm = (v - exports_log_min) / (exports_log_max - exports_log_min) if exports_log_max != exports_log_min else 0
             idx = int(round(norm * (len(smooth_palette)-1)))
             return smooth_palette[idx]
@@ -380,12 +395,10 @@ def highlight_top15():
             return "#dddddd"
 
     filtered_world["custom_color"] = filtered_world.apply(color_row, axis=1)
-
     columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
     filtered_world_small = filtered_world[columns_to_keep]
     geo_source.geojson = filtered_world_small.to_json()
 
-    # Update top 15 table and chart
     top15_data = filtered_world.loc[top15.index, ["ADMIN", "exports"]].sort_values("exports", ascending=False)
     top15_table_source.data = dict(
         country=top15_data["ADMIN"].tolist(),
@@ -397,25 +410,8 @@ def highlight_top15():
     )
     top15_chart.x_range.factors = top15_data["ADMIN"].tolist()
 
-def reset_top15():
-    exports_log_min = filtered_world["exports_log"].min()
-    exports_log_max = filtered_world["exports_log"].max()
-    exports_log = filtered_world["exports_log"].values
-    filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, exports_log_min, exports_log_max)
-    filtered_world.loc[filtered_world["ADMIN"] == "China", "custom_color"] = china_color
-
-    columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
-    filtered_world_small = filtered_world[columns_to_keep]
-    geo_source.geojson = filtered_world_small.to_json()
-
-    top15_table_source.data = dict(country=[], value=[])
-    top15_chart_source.data = dict(country=[], value=[])
-    top15_chart.x_range.factors = []
-
 top15_button.on_click(highlight_top15)
-reset_button.on_click(reset_top15)
 
-# --- Custom CSS for button ---
 style = """
 <style>
 .bk-btn.styled-btn {
@@ -449,7 +445,6 @@ bottom_selector_row = row(
     select_country,
     sizing_mode="fixed"
 )
-
 top15_buttons_row = row(
     top15_button,
     reset_button,
@@ -479,6 +474,27 @@ layout = column(
     sizing_mode="stretch_width"
 )
 curdoc().add_root(layout)
+
+def update_selected(attr, old, new):
+    country = select_country.value
+    exp_type = select_type.value
+    value_type = select_value_type.value
+    df_country = admin_to_df_map.get(country)
+    df_col = country_type_value_to_col.get(df_country, {}).get(exp_type, {}).get(value_type)
+    if df_col and df_col in df.columns:
+        last_24 = df.tail(24)
+        if date_col and date_col in df.columns:
+            dates = last_24[date_col].tolist()
+        else:
+            dates = last_24.index.tolist()
+        exports = last_24[df_col].apply(lambda x: round(x, 1) if pd.notnull(x) else None).tolist()
+        selected_table_source.data = dict(
+            index=list(range(len(dates))),
+            date=dates,
+            exports=exports
+        )
+    else:
+        selected_table_source.data = dict(index=[], date=[], exports=[])
 
 def update_titles_and_map(attr, old, new):
     exp_type = select_type.value
