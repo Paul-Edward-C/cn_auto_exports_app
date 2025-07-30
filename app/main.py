@@ -563,6 +563,11 @@ style = """
 """
 style_div = Div(text=style)
 
+app_title_div = Div(
+    text="<h1 style='font-family:Georgia; font-size:2rem; color:#104b1f; margin-bottom:5px;'>China, Auto exports</h1>",
+    width=900, height=50
+)
+
 footnote_div = Div(text="<span style='font-family:Georgia; font-size:0.9rem; color:#444;'>Source: EAE, CCA</span>", width=300, height=25)
 
 select_type = Select(title="Export Type", value=default_type, options=export_types, width=220)
@@ -601,6 +606,7 @@ main_row = row(
 )
 
 layout = column(
+    app_title_div,
     style_div,
     top_selectors_row,
     world_line_chart,
