@@ -289,7 +289,7 @@ reset_button = Button(
     button_type="default",
     width=40,
     height=35,
-    css_classes=["styled-btn", "reset-btn"]
+
 )
 
 country_width = 250
