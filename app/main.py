@@ -331,8 +331,8 @@ world_line_chart = figure(
     margin=(20, 10, 10, 10)
 )
 world_line_chart.line(x="date", y="value", source=world_chart_source, line_width=2, color="#2171b5")
-#world_line_chart.yaxis.formatter = NumeralTickFormatter(format="0,0.0")
-#world_line_chart.xaxis.formatter = DatetimeTickFormatter(years="%b-%y", months="%b-%y")
+world_line_chart.yaxis.formatter = NumeralTickFormatter(format="0,0.0")
+world_line_chart.xaxis.formatter = DatetimeTickFormatter(years="%b-%y", months="%b-%y")
 world_line_chart.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen',
                     text=f"www.eastasiaecon.com/cn/#charts"))
 
