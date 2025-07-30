@@ -19,27 +19,62 @@ from bokeh.themes import Theme
 
 # --- Theme settings ---
 theme_json = {
-    'attrs': {
-        'figure': {
-            'background_fill_color': '#228B22',
-            'background_fill_alpha': 0.05,
-        },
-        'Axis': {
-            'axis_label_text_font': 'Georgia',
-            'major_label_text_font': 'Georgia',
-        },
-        'Title': {
-            'text_font_style': 'bold',
-            'text_font': 'Georgia',
-            'text_font_size': '18px',
-        },
-        'Legend': {
-            'label_text_font': 'Georgia',
-            'padding': 1,
-            'spacing': 1,
-            'background_fill_alpha': 0.7,
-        },
-    }
+  "attrs": {
+      "figure": {
+          "width": 600,
+          "height": 400,
+          "toolbar_location": "right"
+      },
+      "Axis": {
+          "axis_label_text_font": "Georgia",
+          "axis_label_text_font_size": "0.75em",
+          "major_label_text_font": "Georgia",
+          "major_label_text_font_size": "0.75em"
+      },
+      "YAxis": {
+          "formatter": {
+              "type": "NumeralTickFormatter",
+              "format": "0,0.0"
+          },
+          "axis_label_text_font_size": "0.75em"
+      },
+      "YAxis[1]": {
+          "formatter": {
+              "type": "NumeralTickFormatter",
+              "format": "0,0.0"
+          },
+          "axis_label_text_font_size": "0.75em"
+      },
+      "XAxis": {
+          "formatter": {
+              "type": "DatetimeTickFormatter",
+              "months": "%b %Y"
+          }
+      },
+      "Title": {
+          "text_font_style": "bold",
+          "text_font": "Georgia",
+          "text_font_size": "1em"
+      },
+      "Legend": {
+          "label_text_font": "Georgia",
+          "label_text_font_size": "0.875em"
+      },
+      "Label": {
+          "text_font": "Georgia",
+          "text_font_size": "0.875em",
+          "text_font_style": "bold",
+          "text_color": "#556B2F",
+          "text_align": "left",
+          "text_baseline": "bottom",
+          "background_fill_color": "white",
+          "background_fill_alpha": 1.0,
+          "border_line_alpha": 0.3,
+          "border_line_width": 0.5,
+          "border_line_color": "#A9A9A9",
+          "padding": 5
+      }
+  }
 }
 
 curdoc().theme = Theme(json=theme_json)
@@ -296,8 +331,10 @@ world_line_chart = figure(
     margin=(20, 10, 10, 10)
 )
 world_line_chart.line(x="date", y="value", source=world_chart_source, line_width=2, color="#2171b5")
-world_line_chart.yaxis.formatter = NumeralTickFormatter(format="0,0.0")
-world_line_chart.xaxis.formatter = DatetimeTickFormatter(years="%b-%y", months="%b-%y")
+#world_line_chart.yaxis.formatter = NumeralTickFormatter(format="0,0.0")
+#world_line_chart.xaxis.formatter = DatetimeTickFormatter(years="%b-%y", months="%b-%y")
+world_line_chart.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen',
+                    text=f"www.eastasiaecon.com/cn/#charts"))
 
 update_world_chart()    # <-- Ensures chart is populated at startup
 
@@ -526,6 +563,8 @@ style = """
 """
 style_div = Div(text=style)
 
+footnote_div = Div(text="<span style='font-family:Georgia; font-size:0.9rem; color:#444;'>Source: EAE, CCA</span>", width=300, height=25)
+
 select_type = Select(title="Export Type", value=default_type, options=export_types, width=220)
 select_value_type = Select(title="Value Type", value=default_value_type, options=value_types, width=220)
 select_country = Select(title="Select Country", value="", options=sorted(list(admin_to_df_map.keys())), width=220)
@@ -569,6 +608,7 @@ layout = column(
     bottom_selector_row,
     selected_div,
     data_table,
+    footnote_div,  # <---- Add this line
     sizing_mode="stretch_width"
 )
 curdoc().add_root(layout)
