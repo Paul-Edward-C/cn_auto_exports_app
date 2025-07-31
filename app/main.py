@@ -440,48 +440,33 @@ def update_map_type(attr, old, new):
 
 # --- Highlight Top 15: ONLY top 15 get palette, ALL others (including China) are grey ---
 def highlight_top15():
-    exp_type = select_type.value
-    value_type = select_value_type.value
-
-    country_exports = {}
-    for admin_name, df_country in admin_to_df_map.items():
-        df_col = country_type_value_to_col.get(df_country, {}).get(exp_type, {}).get(value_type)
-        if df_col and df_col in df.columns:
-            country_exports[admin_name] = latest_row[df_col]
-        else:
-            country_exports[admin_name] = None
-
-    filtered_world["exports"] = filtered_world["ADMIN"].map(country_exports)
-    if value_type == "USD m":
-        exports_log = np.log1p(filtered_world["exports"].values.astype(float))
-        exports_log[np.isnan(exports_log)] = np.nan
-        filtered_world["exports_log"] = exports_log
-    else:
-        filtered_world["exports_log"] = filtered_world["exports"]
-
-    exports_log = filtered_world["exports_log"].values
-    valid_indices = np.where(~np.isnan(exports_log))[0]
+    # Use original exports values for top 15 selection and display
+    exports = filtered_world["exports"].values
+    valid_indices = np.where(~np.isnan(exports))[0]
     if len(valid_indices) > 15:
-        top15_idx = valid_indices[np.argpartition(-exports_log[valid_indices], 15)[:15]]
+        # Find indices of the top 15 exports (original data)
+        top15_idx = valid_indices[np.argpartition(-exports[valid_indices], 15)[:15]]
     else:
         top15_idx = valid_indices
+    # Get ADMIN names for top 15
     top_admins = set(filtered_world.iloc[top15_idx]["ADMIN"].values)
     
+    # Assign colors: only highlight top 15, others grey
+    exports_log = filtered_world["exports_log"].values
+    exports_log_min = exports_log[top15_idx].min() if len(top15_idx) > 0 else 0
+    exports_log_max = exports_log[top15_idx].max() if len(top15_idx) > 0 else 1
+    norm = (exports_log[top15_idx] - exports_log_min) / (exports_log_max - exports_log_min) if exports_log_max != exports_log_min else np.zeros(len(top15_idx))
+    idx = (norm * (len(smooth_palette) - 1)).round().astype(int)
     colors = np.full(filtered_world.shape[0], "#dddddd", dtype=object)
-    if len(top15_idx) > 0:
-        exports_log_min = exports_log[top15_idx].min()
-        exports_log_max = exports_log[top15_idx].max()
-        norm = (exports_log[top15_idx] - exports_log_min) / (exports_log_max - exports_log_min) if exports_log_max != exports_log_min else np.zeros(len(top15_idx))
-        idx = (norm * (len(smooth_palette) - 1)).round().astype(int)
-        for i, ci in enumerate(top15_idx):
-            colors[ci] = smooth_palette[idx[i]]
-
+    for i, ci in enumerate(top15_idx):
+        colors[ci] = smooth_palette[idx[i]]
     filtered_world["custom_color"] = colors
 
     columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
     filtered_world_small = filtered_world[columns_to_keep]
     geo_source.geojson = filtered_world_small.to_json()
 
+    # For table and chart: use original exports values for top 15
     top15_data = filtered_world.iloc[top15_idx][["ADMIN", "exports"]].sort_values("exports", ascending=False)
     top15_table_source.data = dict(
         country=top15_data["ADMIN"].tolist(),
