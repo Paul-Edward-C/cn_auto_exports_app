@@ -104,6 +104,45 @@ formatter = HTMLTemplateFormatter(
     """
 )
 
+button_formatter = HTMLTemplateFormatter(
+    template="""
+    <style>
+    .bk-btn.bk-btn-primary{font-size:0.9rem;font-family:Georgia;border:none;border-radius:5px;background:#104b1f;transition:opacity .2s ease-in-out;}
+    </style>
+    ... your HTML template ...
+    """
+)
+
+selector_formatter = HTMLTemplateFormatter(
+    template="""
+    <style>
+.bk-input-group {
+    font-size: 1.1rem !important;
+    font-family: Georgia !important;
+    background-color: hsla(120,100%,25%,0.2) !important;
+    font-weight: 900 !important;
+    color: black !important;
+}
+
+.bk-input {
+    font-size: 0.9rem !important;
+    font-family: Georgia !important;
+    background-color: hsla(120,100%,25%,0.1) !important;
+    color: black !important;
+}
+
+
+.choices__item.solid.choices__item--selectable{
+    font-size: 0.9rem;
+    font-family: Georgia;
+    background: #104b1f;
+    font-weight: 900;
+}
+    </style>
+    ... your HTML template ...
+    """
+)
+
 # --- 2. Load map and data ---
 world = gpd.read_file('app/data/ne_10m_admin_0_countries.shp')
 df = pd.read_csv('app/data/auto_total.csv')
@@ -481,8 +520,8 @@ def highlight_top15():
 top15_button.on_click(highlight_top15)
 
 # --- Download buttons ---
-download_timeseries_button = Button(label="Download Timeseries CSV", button_type="primary", width=220, height=35)
-download_top15_button = Button(label="Download Top 15 CSV", button_type="primary", width=220, height=35)
+download_timeseries_button = Button(label="Download Timeseries CSV", button_type="primary", width=220, height=35, css_classes=["bk-btn-primary"])
+download_top15_button = Button(label="Download Top 15 CSV", button_type="primary", width=220, height=35, css_classes=["bk-btn-primary"])
 
 download_timeseries_button.js_on_click(CustomJS(args=dict(source=selected_table_source), code="""
     function toCSV(data) {
@@ -555,9 +594,9 @@ app_title_div = Div(
 
 footnote_div = Div(text="<span style='font-family:Georgia; font-size:0.9rem; color:#444;'>Source: EAE, CCA</span>", width=300, height=25)
 
-select_type = Select(title="Export Type", value=default_type, options=export_types, width=220)
-select_value_type = Select(title="Value Type", value=default_value_type, options=value_types, width=220)
-select_country = Select(title="Select Country", value="", options=sorted(list(admin_to_df_map.keys())), width=220)
+select_type = Select(title="Export Type", value=default_type, options=export_types, width=220, css_classes=["bk-input", "bk-input-group"])
+select_value_type = Select(title="Value Type", value=default_value_type, options=value_types, width=220, css_classes=["bk-input", "bk-input-group"])
+select_country = Select(title="Select Country", value="", options=sorted(list(admin_to_df_map.keys())), width=220, css_classes=["bk-input", "bk-input-group"])
 
 top_selectors_row = row(
     select_type,
