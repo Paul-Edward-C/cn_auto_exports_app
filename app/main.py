@@ -266,6 +266,57 @@ hover.tooltips = [
     ("Note", "@note")
 ]
 
+download_timeseries_button = Button(label="Download Timeseries CSV", button_type="primary", width=220, height=35)
+download_top15_button = Button(label="Download Top 15 CSV", button_type="primary", width=220, height=35)
+
+# Download for country selection (timeseries) table
+download_timeseries_button.js_on_click(CustomJS(args=dict(source=selected_table_source), code="""
+    function toCSV(data) {
+        const cols = Object.keys(data);
+        if (cols.length === 0) { return ""; }
+        const nrows = data[cols[0]].length;
+        const lines = [cols.join(",")];
+        for (let i = 0; i < nrows; i++) {
+            lines.push(cols.map(col => 
+                (data[col][i] == null ? "" : `"${data[col][i]}"`)
+            ).join(","));
+        }
+        return lines.join("\\n");
+    }
+    const csv = toCSV(source.data);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "timeseries.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+"""))
+
+# Download for top 15 table
+download_top15_button.js_on_click(CustomJS(args=dict(source=top15_table_source), code="""
+    function toCSV(data) {
+        const cols = Object.keys(data);
+        if (cols.length === 0) { return ""; }
+        const nrows = data[cols[0]].length;
+        const lines = [cols.join(",")];
+        for (let i = 0; i < nrows; i++) {
+            lines.push(cols.map(col => 
+                (data[col][i] == null ? "" : `"${data[col][i]}"`)
+            ).join(","));
+        }
+        return lines.join("\\n");
+    }
+    const csv = toCSV(source.data);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "top15.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+"""))
+
 # --- CALLBACKS ---
 def reset_top15():
     exports_log_min = filtered_world["exports_log"].min()
@@ -309,7 +360,7 @@ def update_selected(attr, old, new):
         )
     else:
         selected_table_source.data = dict(index=[], date=[], exports=[])
-        
+
 select_country.on_change('value', update_selected)
 select_type.on_change('value', update_selected)
 select_value_type.on_change('value', update_selected)
@@ -424,27 +475,39 @@ style_div = Div(text=style)
 top_selectors_row = row(select_type, select_value_type, sizing_mode="fixed")
 bottom_selector_row = row(select_country, sizing_mode="fixed")
 top15_buttons_row = row(top15_button, reset_button, sizing_mode="fixed")
+
 top15_col = column(
-    top15_buttons_row,
+    top15_buttons_row,            # includes top15_button, reset_button, download_top15_button
     top15_chart,
     top15_table,
     sizing_mode="fixed",
     width=370
 )
+
 main_row = row(
     p,
     top15_col,
     sizing_mode="stretch_width",
     height=520
 )
+
+bottom_selector_row = row(
+    select_country,
+    download_timeseries_button,
+    sizing_mode="fixed"
+)
+
 layout = column(
     style_div,
     top_selectors_row,
     world_line_chart,
     main_row,
-    bottom_selector_row,
+    bottom_selector_row,          # includes country select and download_timeseries_button
     data_table,
     sizing_mode="stretch_width"
 )
+
+
+
 curdoc().add_root(layout)
 curdoc().title = "China, Auto Exports"
