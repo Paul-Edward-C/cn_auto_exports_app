@@ -7,9 +7,10 @@ import re
 
 from bokeh.io import curdoc
 from bokeh.models import (
-    GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div, Label,
+    GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div, Label,NumeralTickFormatter, DatetimeTickFormatter,
     DataTable, TableColumn, HTMLTemplateFormatter, ColorBar, LinearColorMapper, CustomJS
 )
+
 from bokeh.plotting import figure
 from bokeh.layouts import column, row
 from bokeh.themes import Theme
@@ -72,7 +73,11 @@ date_col = None
 for col in df.columns:
     if re.search('date', col, re.IGNORECASE):
         date_col = col
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
         break
+
+
+
 
 # --- COUNTRY COLUMN MAP ---
 country_type_value_to_col = {}
@@ -231,9 +236,8 @@ world_line_chart = figure(
     margin=(20, 10, 10, 10)
 )
 world_line_chart.line(x="date", y="value", source=world_chart_source, line_width=2, color="#2171b5")
-world_line_chart.circle(x="date", y="value", source=world_chart_source, size=4, color="#2171b5", alpha=0.7)
-world_line_chart.xaxis.axis_label = "Month"
-world_line_chart.yaxis.axis_label = "Exports"
+world_line_chart.yaxis.formatter = NumeralTickFormatter(format="0,0.0")
+world_line_chart.xaxis.formatter = DatetimeTickFormatter(years="%b-%y", months="%b-%y")
 
 # --- FILL INITIAL DATA ---
 update_world_chart()
