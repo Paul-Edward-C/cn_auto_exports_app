@@ -297,9 +297,10 @@ def update_selected(attr, old, new):
     if df_col and df_col in df.columns:
         last_24 = df.tail(24)
         if date_col and date_col in df.columns:
-            dates = last_24[date_col].tolist()
+            # Ensure date is formatted as string (e.g. '2024-07-31')
+            dates = last_24[date_col].dt.strftime('%Y-%m-%d').tolist()
         else:
-            dates = last_24.index.tolist()
+            dates = [str(d) for d in last_24.index.tolist()]
         exports = last_24[df_col].apply(lambda x: round(x, 1) if pd.notnull(x) else None).tolist()
         selected_table_source.data = dict(
             index=list(range(len(dates))),
@@ -308,6 +309,7 @@ def update_selected(attr, old, new):
         )
     else:
         selected_table_source.data = dict(index=[], date=[], exports=[])
+        
 select_country.on_change('value', update_selected)
 select_type.on_change('value', update_selected)
 select_value_type.on_change('value', update_selected)
