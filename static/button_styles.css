@@ -1,0 +1,8 @@
+.bk-btn.bk-btn-primary{ /* Button widget format*/
+    font-size: 0.9rem;
+    font-family: Georgia;
+    border: none;
+    border-radius: 5px;
+    background: #104b1f;
+    transition: opacity .2s ease-in-out;  
+}
