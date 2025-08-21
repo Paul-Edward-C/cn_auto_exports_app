@@ -469,7 +469,9 @@ top15_button.on_click(highlight_top15)
 
 style = """
 <style>
-.bk-btn.styled-btn {
+/* Style any Bokeh button inside a wrapper that has class 'styled-btn' */
+.styled-btn .bk-btn,
+.bk-btn.styled-btn {  /* also cover the rare case if class ends up on <button> */
     font-size: 0.9rem !important;
     font-family: Georgia !important;
     border: none !important;
@@ -480,12 +482,27 @@ style = """
     height: 35px !important;
     width: 220px !important;
     margin: 0 !important;
-    padding: 0px 10px !important;
+    padding: 0 10px !important;
     box-shadow: none !important;
+}
+
+/* Small icon-style button (e.g., your reset) */
+.icon-btn .bk-btn,
+.bk-btn.icon-btn {
+    width: 40px !important;
+    height: 35px !important;
+    padding: 0 6px !important;
 }
 </style>
 """
 style_div = Div(text=style)
+
+for b in [top15_button, download_top15_button, download_timeseries_button]:
+    b.css_classes = ["styled-btn"]
+
+# Keep reset small
+reset_button.css_classes = ["icon-btn"]
+
 top_selectors_row = row(select_type, select_value_type, sizing_mode="fixed")
 bottom_selector_row = row(select_country, sizing_mode="fixed")
 top15_buttons_row = row(top15_button, download_top15_button, reset_button, sizing_mode="fixed")
