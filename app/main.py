@@ -488,7 +488,7 @@ style = """
 style_div = Div(text=style)
 top_selectors_row = row(select_type, select_value_type, sizing_mode="fixed")
 bottom_selector_row = row(select_country, sizing_mode="fixed")
-top15_buttons_row = row(top15_button, reset_button, sizing_mode="fixed")
+top15_buttons_row = row(top15_button, download_top15_button, reset_button, sizing_mode="fixed")
 
 top15_col = column(
     top15_buttons_row,
