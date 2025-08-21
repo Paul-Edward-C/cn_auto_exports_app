@@ -467,35 +467,49 @@ def highlight_top15():
 
 top15_button.on_click(highlight_top15)
 
-style = """
-<style>
-/* Style any Bokeh button inside a wrapper that has class 'styled-btn' */
-.styled-btn .bk-btn,
-.bk-btn.styled-btn {  /* also cover the rare case if class ends up on <button> */
-    font-size: 0.9rem !important;
-    font-family: Georgia !important;
-    border: none !important;
-    border-radius: 5px !important;
-    background: #104b1f !important;
-    color: white !important;
-    transition: opacity .2s ease-in-out !important;
-    height: 35px !important;
-    width: 220px !important;
-    margin: 0 !important;
-    padding: 0 10px !important;
-    box-shadow: none !important;
-}
+from bokeh.models import InlineStyleSheet
 
-/* Small icon-style button (e.g., your reset) */
-.icon-btn .bk-btn,
-.bk-btn.icon-btn {
-    width: 40px !important;
-    height: 35px !important;
-    padding: 0 6px !important;
+# 2) define styles
+BTN_CSS = """
+:host .bk-btn {
+    font-size: 0.9rem;
+    font-family: Georgia, serif;
+    border: none;
+    border-radius: 5px;
+    background: #104b1f;
+    color: white;
+    height: 35px;
+    width: 220px;
+    margin: 0;
+    padding: 0 10px;
+    box-shadow: none;
 }
-</style>
 """
-style_div = Div(text=style)
+
+RESET_CSS = """
+:host .bk-btn {
+    font-size: 0.9rem;
+    font-family: Georgia, serif;
+    border: none;
+    border-radius: 5px;
+    background: #104b1f;
+    color: white;
+    height: 35px;
+    width: 40px;     /* small icon button */
+    margin: 0;
+    padding: 0 6px;
+    box-shadow: none;
+}
+"""
+
+btn_sheet   = InlineStyleSheet(css=BTN_CSS)
+reset_sheet = InlineStyleSheet(css=RESET_CSS)
+
+# 3) apply to your buttons (per-button styles live inside their shadow roots)
+for b in [top15_button, download_top15_button, download_timeseries_button]:
+    b.stylesheets = [btn_sheet]
+
+reset_button.stylesheets = [reset_sheet]
 
 for b in [top15_button, download_top15_button, download_timeseries_button]:
     b.css_classes = ["styled-btn"]
@@ -529,7 +543,6 @@ bottom_selector_row = row(
 )
 
 layout = column(
-    style_div,
     top_selectors_row,
     world_line_chart,
     main_row,
