@@ -7,10 +7,9 @@ import re
 
 from bokeh.io import curdoc
 from bokeh.models import (
-    GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div, Label,NumeralTickFormatter, DatetimeTickFormatter,
+    GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div, Label, NumeralTickFormatter, DatetimeTickFormatter,
     DataTable, TableColumn, HTMLTemplateFormatter, ColorBar, LinearColorMapper, CustomJS
 )
-
 from bokeh.plotting import figure
 from bokeh.layouts import column, row
 from bokeh.themes import Theme
@@ -42,12 +41,8 @@ theme_json = {
 curdoc().theme = Theme(json=theme_json)
 
 # --- PALETTE ---
-blues = [
-    "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#08519c", "#08306b"
-]
-greens = [
-    "#c7e9c0", "#a1d99b", "#74c476", "#41ab5d", "#238b45", "#006d2c", "#00441b"
-]
+blues = ["#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#08519c", "#08306b"]
+greens = ["#c7e9c0", "#a1d99b", "#74c476", "#41ab5d", "#238b45", "#006d2c", "#00441b"]
 palette = blues[::-1] + greens
 def interpolate_palette(palette, n):
     cmap = mcolors.LinearSegmentedColormap.from_list('custom', palette)
@@ -69,6 +64,7 @@ formatter = HTMLTemplateFormatter(
 # --- DATA LOAD ---
 world = gpd.read_file('app/data/ne_10m_admin_0_countries.shp')
 df = pd.read_csv('app/data/auto_total.csv')
+
 date_col = None
 for col in df.columns:
     if re.search('date', col, re.IGNORECASE):
@@ -76,8 +72,15 @@ for col in df.columns:
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
         break
 
-
-
+def latest_date_label(fmt="%b %Y"):
+    """Return latest date label for titles."""
+    if date_col and date_col in df.columns:
+        dates = pd.to_datetime(df[date_col], errors='coerce').dropna()
+        if not dates.empty:
+            return dates.max().strftime(fmt)
+    if isinstance(df.index, pd.DatetimeIndex) and not df.index.empty:
+        return df.index.max().strftime(fmt)
+    return "Latest"
 
 # --- COUNTRY COLUMN MAP ---
 country_type_value_to_col = {}
@@ -117,6 +120,7 @@ select_value_type = Select(title="Value Type", value=default_value_type, options
 def has_match(admin_name):
     match = difflib.get_close_matches(admin_name, country_list, n=1, cutoff=0.7)
     return bool(match)
+
 filtered_world = world[world['ADMIN'].apply(has_match)].reset_index(drop=True)
 admin_to_df_map = {}
 for admin_name in filtered_world['ADMIN']:
@@ -175,6 +179,7 @@ geo_source = GeoJSONDataSource(geojson=filtered_world_small.to_json())
 # --- WORLD TIMESERIES ---
 world_country = 'World'
 world_chart_source = ColumnDataSource(data=dict(date=[], value=[]))
+
 def get_world_timeseries(export_type, value_type):
     world_col = country_type_value_to_col.get(world_country, {}).get(export_type, {}).get(value_type)
     if world_col and world_col in df.columns:
@@ -218,8 +223,8 @@ top15_table = DataTable(
 )
 top15_chart_source = ColumnDataSource(data=dict(country=[], value=[]))
 top15_chart = figure(
-    x_range=[], height=350, width=370, title=f"Top 15 destinations, {default_type}, {default_value_type}", toolbar_location=None, tools="",
-    min_border_left=10, min_border_right=10, min_border_top=10, min_border_bottom=10
+    x_range=[], height=350, width=370, title=f"Top 15 destinations, {default_type}, {default_value_type}",
+    toolbar_location=None, tools="", min_border_left=10, min_border_right=10, min_border_top=10, min_border_bottom=10
 )
 top15_chart.vbar(x="country", top="value", source=top15_chart_source, width=0.7, color="#556B2F", alpha=0.7)
 top15_chart.xaxis.major_label_orientation = 1.0
@@ -227,7 +232,7 @@ top15_chart.xgrid.grid_line_color = None
 top15_chart.title.text_font_size = "14px"
 selected_table_source = ColumnDataSource(data=dict(index=[], date=[], exports=[]))
 
-# --- WORLD CHART ---
+# --- WORLD CHART (with hover) ---
 world_line_chart = figure(
     height=220, width=600,
     title="Monthly World Auto Exports",
@@ -235,7 +240,16 @@ world_line_chart = figure(
     tools="pan,xwheel_zoom,box_zoom,reset,save",
     margin=(20, 10, 10, 10)
 )
-world_line_chart.line(x="date", y="value", source=world_chart_source, line_width=2, color="#2171b5")
+line_ts = world_line_chart.line(x="date", y="value", source=world_chart_source, line_width=2, color="#2171b5")
+pts_ts  = world_line_chart.circle(x="date", y="value", source=world_chart_source, size=5, alpha=0.15)
+
+hover_ts = HoverTool(
+    renderers=[pts_ts],
+    tooltips=[("Date", "@date{%b %Y}"), ("Value", "@value{0,0.0}")],
+    formatters={"@date": "datetime"},
+    mode="vline"
+)
+world_line_chart.add_tools(hover_ts)
 world_line_chart.yaxis.formatter = NumeralTickFormatter(format="0,0.0")
 world_line_chart.xaxis.formatter = DatetimeTickFormatter(years="%b-%y", months="%b-%y")
 
@@ -244,15 +258,16 @@ update_world_chart()
 
 # --- MAIN MAP ---
 TOOLS = "pan,wheel_zoom,box_zoom,reset,hover,save"
+latest_label = latest_date_label()
 p = figure(
-    title=f"China, Auto exports by country, {default_type}, {default_value_type}",
+    title=f"China, Auto exports by country, {default_type}, {default_value_type} (Latest: {latest_label})",
     tools=TOOLS, x_axis_location=None, y_axis_location=None,
     active_scroll='wheel_zoom', width=950, height=520,
 )
 p.grid.grid_line_color = None
 color_mapper_obj = LinearColorMapper(palette=smooth_palette, low=exports_log_min, high=exports_log_max, nan_color="#dddddd")
 color_bar = ColorBar(color_mapper=color_mapper_obj, label_standoff=12, location=(0,0),
-                     title=f"Exports {default_type}, {default_value_type}")
+                     title=f"Exports ({default_type}, {default_value_type})")
 p.add_layout(color_bar, 'right')
 p.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen', text=f"www.eastasiaecon.com/cn/#charts"))
 p.xaxis.axis_label = f'Source: CCA, EEA'
@@ -348,16 +363,11 @@ def update_selected(attr, old, new):
     if df_col and df_col in df.columns:
         last_24 = df.tail(24)
         if date_col and date_col in df.columns:
-            # Ensure date is formatted as string (e.g. '2024-07-31')
             dates = last_24[date_col].dt.strftime('%Y-%m-%d').tolist()
         else:
             dates = [str(d) for d in last_24.index.tolist()]
         exports = last_24[df_col].apply(lambda x: round(x, 1) if pd.notnull(x) else None).tolist()
-        selected_table_source.data = dict(
-            index=list(range(len(dates))),
-            date=dates,
-            exports=exports
-        )
+        selected_table_source.data = dict(index=list(range(len(dates))), date=dates, exports=exports)
     else:
         selected_table_source.data = dict(index=[], date=[], exports=[])
 
@@ -382,26 +392,32 @@ def update_map_type(attr, old, new):
         )
     else:
         filtered_world["exports_log"] = filtered_world["exports"]
-    filtered_world["note"] = filtered_world["exports"].apply(
-        lambda x: "No Data" if pd.isnull(x) else ""
-    )
+    filtered_world["note"] = filtered_world["exports"].apply(lambda x: "No Data" if pd.isnull(x) else "")
     filtered_world.loc[filtered_world["ADMIN"] == "China", "note"] = "Exporter (no data)"
+
     exports_log_min = filtered_world["exports_log"].min()
     exports_log_max = filtered_world["exports_log"].max()
     exports_log = filtered_world["exports_log"].values
     filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, exports_log_min, exports_log_max)
+
     columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
     filtered_world_small = filtered_world[columns_to_keep]
     geo_source.geojson = filtered_world_small.to_json()
-    p.title.text = f"Automobile Exports by Country ({exp_type}, {value_type})"
+
+    latest_label = latest_date_label()
+    p.title.text = f"China, Auto exports by country, {exp_type}, {value_type} (Latest: {latest_label})"
+
     data_table.columns = make_data_table_columns(exp_type, value_type)
     color_mapper_obj.low = exports_log_min
     color_mapper_obj.high = exports_log_max
     color_bar.title = f"Exports ({exp_type}, {value_type})"
+
     top15_table_source.data = dict(country=[], value=[])
     top15_chart_source.data = dict(country=[], value=[])
     top15_chart.x_range.factors = []
+
     update_world_chart()
+
 select_type.on_change('value', update_map_type)
 select_value_type.on_change('value', update_map_type)
 
@@ -422,13 +438,14 @@ def highlight_top15():
         filtered_world["exports_log"] = exports_log
     else:
         filtered_world["exports_log"] = filtered_world["exports"]
+
     exports_log = filtered_world["exports_log"].values
     valid_indices = np.where(~np.isnan(exports_log))[0]
     if len(valid_indices) > 15:
         top15_idx = valid_indices[np.argpartition(-exports_log[valid_indices], 15)[:15]]
     else:
         top15_idx = valid_indices
-    top_admins = set(filtered_world.iloc[top15_idx]["ADMIN"].values)
+
     colors = np.full(filtered_world.shape[0], "#dddddd", dtype=object)
     if len(top15_idx) > 0:
         exports_log_min = exports_log[top15_idx].min()
@@ -437,20 +454,17 @@ def highlight_top15():
         idx = (norm * (len(smooth_palette) - 1)).round().astype(int)
         for i, ci in enumerate(top15_idx):
             colors[ci] = smooth_palette[idx[i]]
+
     filtered_world["custom_color"] = colors
     columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
     filtered_world_small = filtered_world[columns_to_keep]
     geo_source.geojson = filtered_world_small.to_json()
+
     top15_data = filtered_world.iloc[top15_idx][["ADMIN", "exports"]].sort_values("exports", ascending=False)
-    top15_table_source.data = dict(
-        country=top15_data["ADMIN"].tolist(),
-        value=top15_data["exports"].tolist(),
-    )
-    top15_chart_source.data = dict(
-        country=top15_data["ADMIN"].tolist(),
-        value=top15_data["exports"].tolist(),
-    )
+    top15_table_source.data = dict(country=top15_data["ADMIN"].tolist(), value=top15_data["exports"].tolist())
+    top15_chart_source.data = dict(country=top15_data["ADMIN"].tolist(), value=top15_data["exports"].tolist())
     top15_chart.x_range.factors = top15_data["ADMIN"].tolist()
+
 top15_button.on_click(highlight_top15)
 
 style = """
@@ -477,7 +491,7 @@ bottom_selector_row = row(select_country, sizing_mode="fixed")
 top15_buttons_row = row(top15_button, reset_button, sizing_mode="fixed")
 
 top15_col = column(
-    top15_buttons_row,            # includes top15_button, reset_button, download_top15_button
+    top15_buttons_row,
     top15_chart,
     top15_table,
     sizing_mode="fixed",
@@ -502,12 +516,10 @@ layout = column(
     top_selectors_row,
     world_line_chart,
     main_row,
-    bottom_selector_row,          # includes country select and download_timeseries_button
-    data_table,
+    bottom_selector_row,
+    DataTable(source=selected_table_source, columns=columns, width=total_width, height=400, index_position=None, header_row=True),
     sizing_mode="stretch_width"
 )
-
-
 
 curdoc().add_root(layout)
 curdoc().title = "China, Auto Exports"
