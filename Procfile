@@ -1,1 +1,1 @@
-procfile is web: bokeh serve --port=$PORT --allow-websocket-origin=cn-auto-exports-179e6eb884a8.herokuapp.com --address=0.0.0.0 --use-xheaders app
+web: bokeh serve --port=$PORT --allow-websocket-origin=cn-auto-exports-179e6eb884a8.herokuapp.com --address=0.0.0.0 --use-xheaders app
