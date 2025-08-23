@@ -25,7 +25,7 @@ from bokeh.models import (
 from bokeh.plotting import figure
 from bokeh.layouts import column, row
 from bokeh.themes import Theme
-from bokeh.events import DocumentReady
+#from bokeh.events import DocumentReady
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -464,9 +464,21 @@ series_chart = figure(
 line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=2)
 pts_ts  = series_chart.circle(x="date", y="value", source=series_source, size=5, alpha=0.15)
 
+
+def _lock_series_rangers():
+    # Restrict auto-ranging to the data renderers (not the background image)
+    series_xr.renderers = [line_ts, pts_ts]
+    series_yr.renderers = [line_ts, pts_ts]
+    # Nudge the background once to the current range
+    xs, xe = series_chart.x_range.start, series_chart.x_range.end
+    ys, ye = series_chart.y_range.start, series_chart.y_range.end
+    if xs is not None and xe is not None and ys is not None and ye is not None:
+        bg_series_src.data.update(x=[xs], y=[ys], w=[xe - xs], h=[ye - ys])
+
+curdoc().add_next_tick_callback(_lock_series_rangers)
 # tell DataRange1d to ONLY use these renderers (ignores background image)
-series_xr.renderers = [line_ts, pts_ts]
-series_yr.renderers = [line_ts, pts_ts]
+##series_xr.renderers = [line_ts, pts_ts]
+#series_yr.renderers = [line_ts, pts_ts]
 
 hover_ts = HoverTool(
     renderers=[pts_ts],
@@ -497,7 +509,7 @@ update_bg_js = CustomJS(args=dict(xr=series_xr, yr=series_yr, bg=bg_series_src),
 for prop in ("start", "end"):
     series_xr.js_on_change(prop, update_bg_js)
     series_yr.js_on_change(prop, update_bg_js)
-series_chart.js_on_event(DocumentReady, update_bg_js)
+#series_chart.js_on_event(DocumentReady, update_bg_js)
 
 # =============================================================================
 # TABLES & BUTTONS
