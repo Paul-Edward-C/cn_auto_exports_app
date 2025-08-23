@@ -434,9 +434,9 @@ sync_map_js = CustomJS(args=dict(src=bg_map_src, xr=p.x_range, yr=p.y_range), co
     src.data = { url: u, x:[xr.start], y:[yr.start], w:[xr.end-xr.start], h:[yr.end-yr.start] };
     src.change.emit();
 """)
-for prop in ("start","end"):
-    p.x_range.js_on_change(prop, sync_map_js)
-    p.y_range.js_on_change(prop, sync_map_js)
+#for prop in ("start","end"):
+#    p.x_range.js_on_change(prop, sync_map_js)
+#    p.y_range.js_on_change(prop, sync_map_js)
 
 # --- Top 15 bar
 top15_chart = figure(
@@ -506,9 +506,9 @@ update_bg_js = CustomJS(args=dict(xr=series_xr, yr=series_yr, bg=bg_series_src),
     bg.data.h = [ye - ys];
     bg.change.emit();
 """)
-for prop in ("start", "end"):
-    series_xr.js_on_change(prop, update_bg_js)
-    series_yr.js_on_change(prop, update_bg_js)
+#for prop in ("start", "end"):
+#    series_xr.js_on_change(prop, update_bg_js)
+#    series_yr.js_on_change(prop, update_bg_js)
 #series_chart.js_on_event(DocumentReady, update_bg_js)
 
 # =============================================================================
@@ -878,8 +878,61 @@ series_section = column(
 )
 
 layout = column(app_title, snapshot_section, series_section, app_footnote, sizing_mode="stretch_width")
-curdoc().add_root(layout)
-curdoc().title = "China — Trade: Snapshot & Series"
+#curdoc().add_root(layout)
+#curdoc().title = "China — Trade: Snapshot & Series"
+
+def _setup_js_callbacks():
+    # 1) Lock series autoranges to the data renderers (prevents bg image from driving ranges)
+    series_xr.renderers = [line_ts, pts_ts]
+    series_yr.renderers = [line_ts, pts_ts]
+
+    # 2) Map background sync (runs in the browser when ranges change)
+    sync_map_js = CustomJS(args=dict(src=bg_map_src, xr=p.x_range, yr=p.y_range), code="""
+        const u = src.data.url;  // keep the existing URL array
+        src.data = { url: u,
+                     x:[xr.start], y:[yr.start],
+                     w:[xr.end - xr.start], h:[yr.end - yr.start] };
+        src.change.emit();
+    """)
+    p.x_range.js_on_change('start', sync_map_js)
+    p.x_range.js_on_change('end',   sync_map_js)
+    p.y_range.js_on_change('start', sync_map_js)
+    p.y_range.js_on_change('end',   sync_map_js)
+
+    # 3) Series background sync (runs in the browser when autoranges change)
+    update_bg_js = CustomJS(args=dict(xr=series_xr, yr=series_yr, bg=bg_series_src), code="""
+        const xs = xr.start, xe = xr.end, ys = yr.start, ye = yr.end;
+        if (xs == null || xe == null || ys == null || ye == null) return;
+        bg.data.x = [xs];  bg.data.y = [ys];
+        bg.data.w = [xe - xs];  bg.data.h = [ye - ys];
+        bg.change.emit();
+    """)
+    series_xr.js_on_change('start', update_bg_js)
+    series_xr.js_on_change('end',   update_bg_js)
+    series_yr.js_on_change('start', update_bg_js)
+    series_yr.js_on_change('end',   update_bg_js)
+
+    # 4) Prime both backgrounds once from Python (after models are attached to the doc)
+    if None not in (p.x_range.start, p.x_range.end, p.y_range.start, p.y_range.end):
+        bg_map_src.data = dict(
+            url=bg_map_src.data['url'],  # keep existing list
+            x=[p.x_range.start], y=[p.y_range.start],
+            w=[p.x_range.end - p.x_range.start],
+            h=[p.y_range.end - p.y_range.start],
+        )
+
+    xs, xe, ys, ye = series_xr.start, series_xr.end, series_yr.start, series_yr.end
+    if None not in (xs, xe, ys, ye):
+        bg_series_src.data = dict(
+            url=bg_series_src.data['url'],  # keep existing list
+            x=[xs], y=[ys],
+            w=[xe - xs], h=[ye - ys],
+        )
+
+# schedule after the layout is attached to the doc, so all model ids are valid
+curdoc().add_root(layout)   
+curdoc().title = "China — Trade: Snapshot & Series"                  # add models to the document first
+curdoc().add_next_tick_callback(_setup_js_callbacks)
 
 # =============================================================================
 # CSV DOWNLOADS
