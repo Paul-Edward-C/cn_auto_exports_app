@@ -27,6 +27,43 @@ from bokeh.layouts import column, row
 from bokeh.themes import Theme
 from bokeh.events import DocumentReady
 
+
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+
+DF_PATH = DATA_DIR / "auto_total.csv"
+WORLD_SHP = DATA_DIR / "ne_10m_admin_0_countries.shp"
+WORLD_GEOJSON = DATA_DIR / "ne_10m_admin_0_countries.geojson"
+
+world = None
+_using_gpd = False
+
+try:
+    if WORLD_GEOJSON.exists():
+        with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
+            gj = json.load(f)
+        # Make a DataFrame with properties + geometry in a column we’ll rename
+        world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
+        _using_gpd = False
+    elif gpd is not None and WORLD_SHP.exists():
+        # Only try shapefile if GeoJSON isn't bundled
+        world = gpd.read_file(WORLD_SHP.as_posix())
+        _using_gpd = True
+    else:
+        raise FileNotFoundError("No world shapefile/geojson found in data/")
+except Exception as e:
+    # If shapefile load fails (typical on Heroku), retry with GeoJSON if available
+    if WORLD_GEOJSON.exists():
+        with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
+            gj = json.load(f)
+        world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
+        _using_gpd = False
+    else:
+        raise RuntimeError(f"Failed to load world geometry: {e}")
+
+# Normalize geometry column name so downstream code can always use 'geometry'
+if not _using_gpd and 'geometry' not in world.columns and '__geom' in world.columns:
+    world = world.rename(columns={'__geom': 'geometry'}) 
 # =============================================================================
 # THEME
 # =============================================================================
@@ -87,7 +124,14 @@ formatter = HTMLTemplateFormatter(
 # =============================================================================
 # DATA LOAD
 # =============================================================================
-DF_PATH = Path('app/data/auto_total.csv')
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+
+DF_PATH = DATA_DIR / "auto_total.csv"
+WORLD_SHP = DATA_DIR / "ne_10m_admin_0_countries.shp"
+WORLD_GEOJSON = DATA_DIR / "ne_10m_admin_0_countries.geojson"
+
+
 df = pd.read_csv(DF_PATH.as_posix())
 
 def _normalize_header(s: str) -> str:
@@ -169,6 +213,17 @@ for col in df.columns:
     flow, country, product, product_cat, unit = parsed
     key_to_col[(flow, country, product, product_cat, unit)] = col
     flows.add(flow); countries.add(country); products.add(product); product_cats.add(product_cat); types_set.add(unit)
+
+for _col in set(key_to_col.values()) & set(df.columns):
+    df[_col] = pd.to_numeric(
+        df[_col].astype(str)
+                 .str.replace(',', '', regex=False)   # remove thousands sep
+                 .str.replace('\u202f', '', regex=False)  # narrow no-break space
+                 .str.replace('\xa0', '', regex=False)    # NBSP
+                 .str.strip(),
+        errors='coerce'
+    )
+
 
 def pick_default(options, preferred=None):
     if preferred and preferred in options:
@@ -541,7 +596,16 @@ def update_snapshot_by_index(i: int):
     for admin_name, df_country in admin_to_df_map.items():
         key = (flow, df_country, product, product_cat, type_str)
         col = key_to_col.get(key)
-        country_exports[admin_name] = (row[col] if col and col in df.columns else None)
+        if col and col in df.columns:
+            val = row[col]
+            # ensure numeric (handles any str leftovers)
+            try:
+                val = float(val)
+            except Exception:
+                val = np.nan
+        else:
+            val = np.nan
+        country_exports[admin_name] = val
 
     filtered_world["exports"] = filtered_world["ADMIN"].map(country_exports)
 
@@ -572,7 +636,7 @@ def update_snapshot_by_index(i: int):
     p.title.text = f"China, {flow} by country, {product}, {product_cat}, {type_str}, {row_date}"
     color_mapper_obj.low = vmin
     color_mapper_obj.high = vmax
-    color_bar.title = f"{flow}, {product}, {product_cat}, {type_str}"
+    color_bar.title = f"{flow}, {product}, {product_cat},{type_str}"
 
     top15_table_source.data = dict(country=[], value=[])
     top15_chart_source.data = dict(country=[], value=[])
@@ -877,3 +941,14 @@ def _sync_backgrounds():
         h=[series_chart.y_range.end - series_chart.y_range.start]
     )
 curdoc().add_next_tick_callback(_sync_backgrounds)
+
+print("[BOOT] CSV path:", DF_PATH.as_posix())
+print("[BOOT] CSV shape:", df.shape)
+print("[BOOT] date_col:", date_col, "dates:", df[date_col].dropna().shape[0])
+print("[BOOT] schema counts -> flows:", len(flows), "countries:", len(countries),
+      "products:", len(products), "types:", len(types_set), "cols indexed:", len(key_to_col))
+
+# Example default combo available by country?
+_default_combo = (default_flow, default_product, default_product_cat, default_type)
+_avail = [c for c in countries if (default_flow, c, default_product, default_product_cat, default_type) in key_to_col]
+print("[BOOT] Default combo:", _default_combo, "country cols:", len(_avail))
