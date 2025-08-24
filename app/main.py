@@ -25,6 +25,7 @@ from bokeh.models import (
 from bokeh.plotting import figure
 from bokeh.layouts import column, row
 from bokeh.themes import Theme
+from bokeh.events import DocumentReady
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -317,6 +318,33 @@ def _scale_values_for_map(flow, type_str):
         if np.isfinite(minv) and minv >= 0:
             return vals.apply(lambda x: np.log1p(x) if pd.notnull(x) else np.nan).astype(float)
     return vals.astype(float)
+
+def add_bamboo_loader():
+    html = """
+    <div id="bamboo-overlay">
+    <div class="bamboo">
+    <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div class="label">Loading…</div>
+    </div>
+    <style>
+    #bamboo-overlay{position:fixed;inset:0;background:rgba(255,255,255,0.96);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999}
+    #bamboo-overlay .bamboo{display:flex;gap:10px}
+    #bamboo-overlay .bamboo span{width:10px;height:70px;background:#228B22;border-radius:5px;
+    box-shadow:0 0 0 2px rgba(16,75,31,.15) inset;animation:grow 1.2s ease-in-out infinite}
+    #bamboo-overlay .bamboo span:nth-child(2){animation-delay:.1s}
+    #bamboo-overlay .bamboo span:nth-child(3){animation-delay:.2s}
+    #bamboo-overlay .bamboo span:nth-child(4){animation-delay:.3s}
+    #bamboo-overlay .bamboo span:nth-child(5){animation-delay:.4s}
+    @keyframes grow{0%,100%{transform:scaleY(.5)}50%{transform:scaleY(1.35)}}
+    #bamboo-overlay .label{margin-top:12px;font-family:Georgia,serif;font-size:16px;color:#104b1f;font-weight:700}
+    </style>
+    """
+    # width/height 0 so it doesn't consume layout space; it's fixed-positioned via CSS
+    return Div(text=html, width=0, height=0)
+
+
 
 # -----------------------------------------------------------------------------
 # Widgets
@@ -839,31 +867,51 @@ def _sync_series_bg(attr, old, new):
 # -----------------------------------------------------------------------------
 # Mount + initial fill
 # -----------------------------------------------------------------------------
+overlay = add_bamboo_loader()
+curdoc().add_root(overlay)
 curdoc().add_root(layout)
 curdoc().title = "China — Trade: Snapshot & Series"
+
+
+# Hide loader on DOM ready (browser side)
+overlay.js_on_event(DocumentReady, CustomJS(args=dict(ov=overlay), code="ov.visible = false;"))
+
 
 # Prime backgrounds after models are attached
 curdoc().add_next_tick_callback(_prime_backgrounds)
 
-# Sync on pan/zoom
-for rng in (p.x_range, p.y_range):
-    rng.on_change('start', _sync_map_bg)
-    rng.on_change('end',   _sync_map_bg)
-for rng in (series_chart.x_range, series_chart.y_range):
-    rng.on_change('start', _sync_series_bg)
-    rng.on_change('end',   _sync_series_bg)
 
-# Initial data
+# Sync backgrounds on pan/zoom
+p.x_range.on_change('start', _sync_map_bg)
+p.x_range.on_change('end', _sync_map_bg)
+p.y_range.on_change('start', _sync_map_bg)
+p.y_range.on_change('end', _sync_map_bg)
+
+
+series_chart.x_range.on_change('start', _sync_series_bg)
+series_chart.x_range.on_change('end', _sync_series_bg)
+series_chart.y_range.on_change('start', _sync_series_bg)
+series_chart.y_range.on_change('end', _sync_series_bg)
+
+
+# Initial data fill
 if len(DATE_LIST) > 0:
-    month_slider.value = len(DATE_LIST)-1
+    month_slider.value = len(DATE_LIST) - 1
     update_snapshot_by_index(month_slider.value)
 else:
     month_slider.title = "Month"
+
 
 def _init_series():
     _update_series_country_options()
     update_series_view()
 _init_series()
+
+
+# Server-side safety net: ensure loader is hidden after first tick
+def _hide_overlay():
+    overlay.visible = False
+curdoc().add_next_tick_callback(_hide_overlay)  
 
 # -----------------------------------------------------------------------------
 # CSV downloads (client-side JS)
