@@ -923,33 +923,34 @@ layout.name = "app_root"
 curdoc().add_root(layout)
 curdoc().title = "China — Trade: Snapshot & Series"
 
-# --- Loader: hide ONLY when real data arrives ---
-_hide_loader_now = CustomJS(code="""
-  for (const id of ['loader-overlay','bamboo-overlay','app-loader']) {
+# --- Hide the HTML loader ONLY after real data lands in the browser ---
+_hide_loader = CustomJS(code="""
+  const ids = ['bamboo-overlay','loader-overlay','app-loader'];
+  for (const id of ids) {
     const el = document.getElementById(id);
+    if (el) {
+      el.style.opacity = '0';
+      el.style.pointerEvents = 'none';
+      setTimeout(() => { el.style.display = 'none'; }, 380);
+    }
+  }
+""")
+geo_source.js_on_change('geojson', _hide_loader)   # map data arrived
+series_source.js_on_change('data', _hide_loader)   # series data arrived
+
+# --- Very conservative fallback (in case change events don't fire) ---
+curdoc().on_event('document_ready', CustomJS(code="""
+  setTimeout(() => {
+    const el = document.getElementById('bamboo-overlay');
     if (el) {
       el.style.opacity = '0';
       el.style.pointerEvents = 'none';
       el.style.display = 'none';
     }
-  }
-""")
-geo_source.js_on_change('geojson', _hide_loader_now)
-series_source.js_on_change('data', _hide_loader_now)
+  }, 8000); // safety timeout
+"""))
 
-# --- Gentle fallback: after DOM is ready, hide if still visible (delayed) ---
-_fallback_hide = CustomJS(code="""
-  setTimeout(() => {
-    for (const id of ['loader-overlay','bamboo-overlay','app-loader']) {
-      const el = document.getElementById(id);
-      if (el) { el.style.opacity = '0'; el.style.pointerEvents = 'none'; el.style.display = 'none'; }
-    }
-  }, 6000);  // delay so the loader actually shows during boot
-""")
-# bind the delayed fallback to any model (fires once when the doc is ready)
-p.js_on_event('document_ready', _fallback_hide)
-
-# --- Sync backgrounds on pan/zoom (unchanged) ---
+# --- Keep your existing range-sync and initial fill exactly as-is ---
 p.x_range.on_change('start', _sync_map_bg)
 p.x_range.on_change('end',   _sync_map_bg)
 p.y_range.on_change('start', _sync_map_bg)
@@ -959,7 +960,6 @@ series_chart.x_range.on_change('end',   _sync_series_bg)
 series_chart.y_range.on_change('start', _sync_series_bg)
 series_chart.y_range.on_change('end',   _sync_series_bg)
 
-# --- Initial data fill (unchanged) ---
 if len(DATE_LIST) > 0:
     month_slider.value = len(DATE_LIST) - 1
     update_snapshot_by_index(month_slider.value)
@@ -968,7 +968,6 @@ else:
 
 _update_series_country_options()
 update_series_view()
-
 # -----------------------------------------------------------------------------
 # CSV downloads (client-side JS)
 # -----------------------------------------------------------------------------
