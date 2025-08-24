@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="loader-template-active" content="yes">
     <title>{{ title }}</title>
     {{ bokeh_css }}
     {{ bokeh_js }}
@@ -20,6 +21,7 @@
       #bamboo-label { margin-top: 12px; font-family: Georgia, serif; font-size: 16px; color: #104b1f; font-weight: 700; }
       /* container for app content */
       #bk-app { min-height: 100vh; display: block; }
+      
     </style>
   </head>
   <body>
@@ -32,34 +34,41 @@
     <!-- Embed your named root from main.py (layout.name = 'app_root') -->
     <div id="bk-app">{{ embed(roots.app_root) }}</div>
 
-    <script>
-      (function() {
-        const overlay = document.getElementById('bamboo-overlay');
-        if (!overlay) return;
-        function hide() {
-          overlay.style.opacity = '0';
-          setTimeout(() => { overlay.style.display = 'none'; }, 380);
-        }
-        // Condition: at least one Bokeh root exists and has size
-        function ready() {
-          const roots = document.querySelectorAll('.bk-root');
-          if (!roots.length) return false;
-          // ensure layout has computed
-          const anyVisible = Array.from(roots).some(r => r.offsetWidth > 0 && r.offsetHeight > 0);
-          return anyVisible;
-        }
-        // MutationObserver: hide when Bokeh renders any root
-        const mo = new MutationObserver(() => { if (ready()) { hide(); mo.disconnect(); } });
-        mo.observe(document.body, { childList: true, subtree: true });
-        // Poll as a fallback (covers cases where observer fires before layout)
-        let tries = 0;
-        const t = setInterval(() => {
-          if (ready() || ++tries > 250) { hide(); clearInterval(t); }
-        }, 40);
-        // Final hard timeout safety (e.g., offline)
-        setTimeout(hide, 8000);
-      })();
-    </script>
+<script>
+  (function() {
+    const overlay = document.getElementById('bamboo-overlay');
+    if (!overlay) return;
+
+    const shownAt = performance.now();
+    const MIN_SHOW_MS = 600; // ensure at least ~0.6s visibility
+
+    function hide() {
+      const elapsed = performance.now() - shownAt;
+      const wait = Math.max(0, MIN_SHOW_MS - elapsed);
+      setTimeout(() => {
+        overlay.style.opacity = '0';
+        setTimeout(() => { overlay.style.display = 'none'; }, 380);
+      }, wait);
+    }
+
+    function ready() {
+      const roots = document.querySelectorAll('.bk-root');
+      if (!roots.length) return false;
+      return Array.from(roots).some(r => r.offsetWidth > 0 && r.offsetHeight > 0);
+    }
+
+    const mo = new MutationObserver(() => { if (ready()) { hide(); mo.disconnect(); } });
+    mo.observe(document.body, { childList: true, subtree: true });
+
+    let tries = 0;
+    const t = setInterval(() => {
+      if (ready() || ++tries > 250) { hide(); clearInterval(t); }
+    }, 40);
+
+    // Safety fallback
+    setTimeout(hide, 8000);
+  })();
+</script>-
   </body>
 </html>
 
