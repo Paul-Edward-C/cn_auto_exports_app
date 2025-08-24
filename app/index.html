@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>{{ title | default("China — Trade: Snapshot & Series") }}</title>
+
+  {{ bokeh_css }}
+  {{ bokeh_js }}
+
+  <style>
+    /* Bamboo loader overlay — visible immediately */
+    #bamboo-overlay{position:fixed;inset:0;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;background:#fff;z-index:999999;
+      transition:opacity .25s ease}
+    #bamboo-overlay .bamboo{display:flex;gap:10px}
+    #bamboo-overlay .bamboo span{width:10px;height:70px;background:#228B22;border-radius:5px;
+      box-shadow:0 0 0 2px rgba(16,75,31,.15) inset;animation:grow 1.2s ease-in-out infinite;
+      transform-origin:center bottom}
+    #bamboo-overlay .bamboo span:nth-child(2){animation-delay:.08s}
+    #bamboo-overlay .bamboo span:nth-child(3){animation-delay:.16s}
+    #bamboo-overlay .bamboo span:nth-child(4){animation-delay:.24s}
+    #bamboo-overlay .bamboo span:nth-child(5){animation-delay:.32s}
+    @keyframes grow{0%,100%{transform:scaleY(.5)}50%{transform:scaleY(1.35)}}
+    #bamboo-overlay .label{margin-top:12px;font-family:Georgia,serif;font-size:16px;color:#104b1f;font-weight:700}
+  </style>
+</head>
+<body>
+  <!-- Loader is visible by default; we hide it after Bokeh renders -->
+  <div id="bamboo-overlay" aria-live="polite" aria-busy="true">
+    <div class="bamboo">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div class="label">Loading…</div>
+  </div>
+
+  <!-- Bokeh injects the application below -->
+  {{ plot_div | safe }}
+  {{ plot_script | safe }}
+
+  <script>
+  (function(){
+    var ov = document.getElementById('bamboo-overlay');
+    function hide(){ if(!ov) return; ov.style.opacity='0'; ov.style.pointerEvents='none';
+      setTimeout(function(){ if(ov && ov.parentNode){ ov.parentNode.removeChild(ov); } }, 300);
+    }
+    function show(){ if(ov){ ov.style.display='flex'; ov.style.opacity='1'; } }
+
+    // Ensure it's visible as soon as the HTML arrives
+    if(document.readyState === 'loading'){
+      document.addEventListener('DOMContentLoaded', show, { once:true });
+    } else { show(); }
+
+    // Preferred: Bokeh dispatches when the doc is idle
+    document.addEventListener('bokeh:idle', hide, { once:true });
+
+    // Fallback: hide when any .bk-root node appears
+    var started = Date.now();
+    (function check(){
+      if(document.querySelector('.bk-root')) { hide(); return; }
+      if(Date.now() - started > 10000) { hide(); return; } // hard timeout safety
+      requestAnimationFrame(check);
+    })();
+  })();
+  </script>
+</body>
+</html>

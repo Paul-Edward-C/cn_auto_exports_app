@@ -867,18 +867,8 @@ def _sync_series_bg(attr, old, new):
 # -----------------------------------------------------------------------------
 # Mount + initial fill
 # -----------------------------------------------------------------------------
-overlay = add_bamboo_loader()
-curdoc().add_root(overlay)
 curdoc().add_root(layout)
 curdoc().title = "China — Trade: Snapshot & Series"
-
-
-# Hide loader on DOM ready (browser side)
-overlay.js_on_event(DocumentReady, CustomJS(args=dict(ov=overlay), code="ov.visible = false;"))
-
-
-# Prime backgrounds after models are attached
-curdoc().add_next_tick_callback(_prime_backgrounds)
 
 
 # Sync backgrounds on pan/zoom
@@ -886,15 +876,13 @@ p.x_range.on_change('start', _sync_map_bg)
 p.x_range.on_change('end', _sync_map_bg)
 p.y_range.on_change('start', _sync_map_bg)
 p.y_range.on_change('end', _sync_map_bg)
-
-
 series_chart.x_range.on_change('start', _sync_series_bg)
 series_chart.x_range.on_change('end', _sync_series_bg)
 series_chart.y_range.on_change('start', _sync_series_bg)
 series_chart.y_range.on_change('end', _sync_series_bg)
 
 
-# Initial data fill
+# Initial data fill (run AFTER the js_on_change handlers above)
 if len(DATE_LIST) > 0:
     month_slider.value = len(DATE_LIST) - 1
     update_snapshot_by_index(month_slider.value)
@@ -902,17 +890,9 @@ else:
     month_slider.title = "Month"
 
 
-def _init_series():
-    _update_series_country_options()
-    update_series_view()
-_init_series()
-
-
-# Server-side safety net: ensure loader is hidden after first tick
-def _hide_overlay():
-    overlay.visible = False
-curdoc().add_next_tick_callback(_hide_overlay)  
-
+# Series init
+_update_series_country_options()
+update_series_view()
 # -----------------------------------------------------------------------------
 # CSV downloads (client-side JS)
 # -----------------------------------------------------------------------------
