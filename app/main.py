@@ -241,6 +241,17 @@ if not (filtered_world["ADMIN"] == "China").any():
             china_row = china_row.rename(columns={'__geom': 'geometry'})
         filtered_world = pd.concat([filtered_world, china_row], ignore_index=True)
 
+
+terms_dict = {
+    "United States of America": "US",
+    "United Arab Emirates": "UAE",
+    "United Kingdom": "UK",
+    "Hong Kong S.A.R" : 'Hong Kong'
+}
+
+filtered_world["ADMIN_DISPLAY"] = filtered_world["ADMIN"].replace(terms_dict)
+
+
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
@@ -260,13 +271,14 @@ def should_log(flow, type_str):
     return is_currency_type(type_str)
 
 def world_to_geojson(df_like):
-    cols = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
+    # add ADMIN_DISPLAY to what we serialize
+    cols = ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
     df_like = df_like[cols]
     if _using_gpd:
         return df_like.to_json()
     feats = []
     for _, r in df_like.iterrows():
-        props = {k: r.get(k, None) for k in ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color']}
+        props = {k: r.get(k, None) for k in ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color']}
         feats.append({"type": "Feature", "properties": props, "geometry": r["geometry"]})
     return json.dumps({"type": "FeatureCollection", "features": feats})
 
@@ -351,7 +363,7 @@ filtered_world["exports"] = np.nan
 filtered_world["exports_log"] = np.nan
 filtered_world["note"] = ""
 filtered_world["custom_color"] = "#dddddd"
-columns_to_keep = ['ADMIN', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
+columns_to_keep = ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
 geo_source = GeoJSONDataSource(geojson=world_to_geojson(filtered_world[columns_to_keep]))
 
 top15_table_source  = ColumnDataSource(data=dict(country=[], value=[]))
@@ -367,7 +379,7 @@ TOOLS = "pan,wheel_zoom,box_zoom,reset,hover,save"
 latest_label = latest_date_label()
 
 p = figure(
-    title=f"China — {default_flow} by country — {default_product} ({default_product_cat}), {default_type} (Latest: {latest_label})",
+    title=f"China, {default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
     tools=TOOLS, x_axis_location=None, y_axis_location=None,
     active_scroll='wheel_zoom', width=950, height=520,
 )
@@ -384,7 +396,7 @@ p.y_range.start, p.y_range.end = float(ymin), float(ymax)
 
 color_mapper_obj = LinearColorMapper(palette=smooth_palette, low=0.0, high=1.0, nan_color="#dddddd")
 color_bar = ColorBar(color_mapper=color_mapper_obj, label_standoff=12, location=(0, 0),
-                     title=f"{default_flow} — {default_product} ({default_product_cat}), {default_type}")
+                     title=f"{default_flow}, {default_product}, {default_product_cat}")
 p.add_layout(color_bar, 'right')
 p.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen', text="www.eastasiaecon.com/cn/#charts"))
 
@@ -392,7 +404,7 @@ patches = p.patches('xs', 'ys', source=geo_source, fill_color='custom_color',
     fill_alpha=0.7, line_color="gray", line_width=0.5)
 hover = p.select_one(HoverTool)
 hover.point_policy = "follow_mouse"
-hover.tooltips = [("Country", "@ADMIN"), ("Value", "@exports{0,0.00}"), ("Note", "@note")]
+hover.tooltips = [("Country", "@ADMIN_DISPLAY"), ("Value", "@exports{0,0.00}"), ("Note", "@note")]
 
 BACKGROUND_URL = "https://www.eastasiaecon.com/content/images/size/w2400/2023/04/Image-29-4-2023-at-7.34-PM.jpeg"
 bg_map_src = ColumnDataSource(dict(url=[BACKGROUND_URL],
@@ -404,7 +416,7 @@ p.image_url(url='url', x='x', y='y', w='w', h='h', source=bg_map_src,
 # --- Top 15 bar
 top15_chart = figure(
     x_range=[], height=350, width=370,
-    title=f"Top 15 — {default_flow}, {default_product} ({default_product_cat}), {default_type} (Latest: {latest_label})",
+    title=f"{default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
     toolbar_location=None, tools="", min_border_left=10, min_border_right=10, min_border_top=10, min_border_bottom=10
 )
 top15_chart.vbar(x="country", top="value", source=top15_chart_source, width=0.7, color="#556B2F", alpha=0.7)
@@ -572,10 +584,10 @@ def update_snapshot_by_index(i: int):
 
     geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
 
-    p.title.text = f"China — {flow} by country — {product} ({product_cat}), {type_str} (Date: {row_date})"
+    p.title.text = f"China, {flow}, {product}, {product_cat}, {type_str}, {row_date})"
     color_mapper_obj.low = vmin
     color_mapper_obj.high = vmax
-    color_bar.title = f"{flow} — {product} ({product_cat}), {type_str}"
+    color_bar.title = f"{flow}, {product}, {product_cat}, {type_str}"
 
     # Top-15
     top15_table_source.data = dict(country=[], value=[])
@@ -583,11 +595,13 @@ def update_snapshot_by_index(i: int):
     top15_chart.x_range.factors = []
     if not world_only_now:
         top = (filtered_world[['ADMIN','exports']].dropna()
-               .sort_values('exports', ascending=False).head(15))
-        top15_table_source.data = dict(country=top['ADMIN'].tolist(), value=top['exports'].tolist())
-        top15_chart_source.data = dict(country=top['ADMIN'].tolist(), value=top['exports'].tolist())
-        top15_chart.x_range.factors = top['ADMIN'].tolist()
-        top15_chart.title.text = f"Top 15 — {flow}, {product} ({product_cat}), {type_str} (Date: {row_date})"
+            .sort_values('exports', ascending=False).head(15))
+        labels = top['ADMIN'].replace(terms_dict)
+
+        top15_table_source.data  = dict(country=labels.tolist(), value=top['exports'].tolist())
+        top15_chart_source.data  = dict(country=labels.tolist(), value=top['exports'].tolist())
+        top15_chart.x_range.factors = labels.tolist()
+        top15_chart.title.text = f"{flow}, {product}, {product_cat}, {type_str}, {row_date}"
 
 def reset_top15():
     flow, product, product_cat, type_str = cur_snap()
@@ -635,11 +649,13 @@ def highlight_top15():
     geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
 
     top = (filtered_world.iloc[top15_idx][["ADMIN", "exports"]]
-           .dropna()
-           .sort_values("exports", ascending=False))
-    top15_table_source.data = dict(country=top["ADMIN"].tolist(), value=top["exports"].tolist())
-    top15_chart_source.data = dict(country=top["ADMIN"].tolist(), value=top["exports"].tolist())
-    top15_chart.x_range.factors = top["ADMIN"].tolist()
+        .dropna()
+        .sort_values("exports", ascending=False))
+    labels = top["ADMIN"].replace(terms_dict)
+
+    top15_table_source.data  = dict(country=labels.tolist(), value=top["exports"].tolist())
+    top15_chart_source.data  = dict(country=labels.tolist(), value=top["exports"].tolist())
+    top15_chart.x_range.factors = labels.tolist()
 
 # -----------------------------------------------------------------------------
 # Series explorer
@@ -666,7 +682,7 @@ def update_series_view():
     flow, country, product, product_cat, type_str = cur_series()
     data = _get_series_timeseries(flow, country, product, product_cat, type_str)
     series_source.data = data
-    series_chart.title.text = f"China — {flow}, {country}, {product} ({product_cat}), {type_str}"
+    series_chart.title.text = f"China, {flow}, {country}, {product}, {product_cat}, {type_str}"
     if len(data["date"]) > 0:
         dates_ser = pd.to_datetime(pd.Series(data["date"]), errors="coerce")
         vals_ser  = pd.to_numeric(pd.Series(data["value"]), errors="coerce")
@@ -729,7 +745,7 @@ pause_button.on_click(_pause)
 # Titles & Layout
 # -----------------------------------------------------------------------------
 app_title = Div(
-    text="China — Foreign trade",
+    text="Mapping China's foreign trade",
     styles={"font-family":"Georgia, serif","font-size":"26px","font-weight":"bold","color":"#104b1f","margin-bottom":"14px"}
 )
 
@@ -755,16 +771,30 @@ snapshot_controls = row(s_flow, s_product, s_product_cat, s_type, sizing_mode="s
 snapshot_date_row = row(month_slider, play_button, pause_button, sizing_mode="stretch_width")
 
 top15_buttons_row = row(top15_button, download_top15_button, reset_button, sizing_mode="stretch_width")
+TOP15_ROWS_VISIBLE = 15
+TOP15_ROW_HEIGHT   = 26
+TOP15_TABLE_HEIGHT = TOP15_ROWS_VISIBLE * TOP15_ROW_HEIGHT + 48  # + header/padding
+
+top15_table = DataTable(
+    source=top15_table_source,
+    columns=[
+        TableColumn(field="country", title="Country", width=200),
+        TableColumn(field="value",   title="Value",   formatter=formatter, width=150),
+    ],
+    width=370,
+    row_height=TOP15_ROW_HEIGHT,
+    height=TOP15_TABLE_HEIGHT,
+    index_position=None,
+    header_row=True,
+)
+
 top15_col = column(
     top15_buttons_row,
     top15_chart,
     Spacer(height=8),
-    DataTable(source=top15_table_source,
-              columns=[TableColumn(field="country", title="Country", width=200),
-                       TableColumn(field="value", title="Value", formatter=formatter, width=150)],
-              width=370, height=350, index_position=None, header_row=True),
-    sizing_mode="stretch_width",
-    width=370
+    top15_table,
+    sizing_mode="fixed",
+    width=370,
 )
 main_row = row(p, top15_col, sizing_mode="stretch_width")
 snapshot_section = column(snapshot_heading, snapshot_controls, snapshot_date_row, no_map_div, main_row, sizing_mode="stretch_width")
