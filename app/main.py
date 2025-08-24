@@ -867,6 +867,7 @@ def _sync_series_bg(attr, old, new):
 # -----------------------------------------------------------------------------
 # Mount + initial fill
 # -----------------------------------------------------------------------------
+layout.name = "app_root"
 curdoc().add_root(layout)
 curdoc().title = "China — Trade: Snapshot & Series"
 
