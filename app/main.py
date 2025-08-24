@@ -799,16 +799,93 @@ top15_col = column(
     sizing_mode="fixed",
     width=370,
 )
-main_row = row(p, top15_col, sizing_mode="stretch_width")
-snapshot_section = column(snapshot_heading, snapshot_controls, snapshot_date_row, no_map_div, main_row, sizing_mode="stretch_width")
 
-series_controls = row(x_flow, x_country_sel, x_product, x_product_cat, x_type, sizing_mode="stretch_width")
-series_row = row(series_chart, series_table, sizing_mode="stretch_width")
-series_buttons = row(download_series_button, sizing_mode="stretch_width")
-series_section = column(series_heading, series_controls, series_row, series_buttons, sizing_mode="stretch_width")
+RIGHT_W = 370   # Top-15 / series table column width
+GUTTER  = 16    # space between left and right columns
 
-layout = column(app_title, snapshot_section, series_section, app_footnote, sizing_mode="stretch_width")
+# SNAPSHOT (TOP) --------------------------------------------------------------
+LEFT_W_MAP = int(p.width)  # keep the map width exactly as defined earlier
 
+# Make selector rows fixed so they don't stretch under the right column
+snapshot_controls.sizing_mode = "fixed"
+snapshot_controls.width       = LEFT_W_MAP
+snapshot_date_row.sizing_mode = "fixed"
+snapshot_date_row.width       = LEFT_W_MAP
+
+left_col = column(
+    snapshot_controls,
+    snapshot_date_row,
+    no_map_div,
+    p,
+    sizing_mode="fixed",
+    width=LEFT_W_MAP,
+)
+
+# Right column (Top-15) stays fixed width
+top15_col.width       = RIGHT_W
+top15_col.sizing_mode = "fixed"
+top15_col.margin      = (0, 0, 0, 0)
+
+snapshot_row_total_w = LEFT_W_MAP + GUTTER + RIGHT_W
+main_row = row(
+    left_col,
+    Spacer(width=GUTTER),
+    top15_col,
+    sizing_mode="fixed",
+    width=snapshot_row_total_w,
+)
+# Top-align children so Top-15 starts flush with selectors
+main_row.styles = {"align-items": "flex-start"}
+
+snapshot_section = column(
+    snapshot_heading,
+    main_row,
+    sizing_mode="fixed",
+    width=snapshot_row_total_w,
+)
+
+# SERIES (BOTTOM) -------------------------------------------------------------
+# Keep original series_chart.width
+LEFT_W_SERIES = int(series_chart.width)
+
+series_controls = row(x_flow, x_country_sel, x_product, x_product_cat, x_type)
+series_controls.sizing_mode = "fixed"
+series_controls.width       = LEFT_W_SERIES + GUTTER + RIGHT_W
+
+series_left  = column(series_chart, sizing_mode="fixed", width=LEFT_W_SERIES)
+series_right = column(series_table,  sizing_mode="fixed", width=RIGHT_W)
+
+series_row_total_w = LEFT_W_SERIES + GUTTER + RIGHT_W
+series_row = row(
+    series_left,
+    Spacer(width=GUTTER),
+    series_right,
+    sizing_mode="fixed",
+    width=series_row_total_w,
+)
+series_row.styles = {"align-items": "flex-start"}
+
+series_buttons = row(download_series_button, sizing_mode="fixed", width=series_row_total_w)
+
+series_section = column(
+    series_heading,
+    series_controls,
+    series_row,
+    series_buttons,
+    sizing_mode="fixed",
+    width=series_row_total_w,
+)
+
+# PAGE ------------------------------------------------------------------------
+layout_total_w = max(snapshot_row_total_w, series_row_total_w)
+layout = column(
+    app_title,
+    snapshot_section,
+    series_section,
+    app_footnote,
+    sizing_mode="fixed",
+    width=layout_total_w,
+)
 # -----------------------------------------------------------------------------
 # Background image syncing (Python-side, safe on Heroku)
 # -----------------------------------------------------------------------------
@@ -842,51 +919,32 @@ def _sync_series_bg(attr, old, new):
 # -----------------------------------------------------------------------------
 # Mount + initial fill
 # -----------------------------------------------------------------------------
+# --- Mount the app root (template will show/hide the loader) ---
 layout.name = "app_root"
 curdoc().add_root(layout)
 curdoc().title = "China — Trade: Snapshot & Series"
 
-_hide_loader = CustomJS(code="""
-for (const id of ['loader-overlay','bamboo-overlay','app-loader']) {
-  const el = document.getElementById(id);
-  if (el) {
-    el.style.opacity = '0';
-    el.style.pointerEvents = 'none';
-    el.style.display = 'none';
-  }
-}
-""")
-
-# Hide when the document hits "ready"
-for m in (p, top15_chart, series_chart):
-    m.js_on_event(DocumentReady, _hide_loader)
-
-# Also hide as soon as first data lands
-geo_source.js_on_change('geojson', _hide_loader)
-series_source.js_on_change('data', _hide_loader)
-
-# Sync backgrounds on pan/zoom
+# --- Sync backgrounds on pan/zoom (unchanged) ---
 p.x_range.on_change('start', _sync_map_bg)
-p.x_range.on_change('end', _sync_map_bg)
+p.x_range.on_change('end',   _sync_map_bg)
 p.y_range.on_change('start', _sync_map_bg)
-p.y_range.on_change('end', _sync_map_bg)
+p.y_range.on_change('end',   _sync_map_bg)
 series_chart.x_range.on_change('start', _sync_series_bg)
-series_chart.x_range.on_change('end', _sync_series_bg)
+series_chart.x_range.on_change('end',   _sync_series_bg)
 series_chart.y_range.on_change('start', _sync_series_bg)
-series_chart.y_range.on_change('end', _sync_series_bg)
+series_chart.y_range.on_change('end',   _sync_series_bg)
 
-
-# Initial data fill (run AFTER the js_on_change handlers above)
+# --- Initial data fill (unchanged) ---
 if len(DATE_LIST) > 0:
     month_slider.value = len(DATE_LIST) - 1
     update_snapshot_by_index(month_slider.value)
 else:
     month_slider.title = "Month"
 
-
-# Series init
+# --- Series init (unchanged) ---
 _update_series_country_options()
 update_series_view()
+
 # -----------------------------------------------------------------------------
 # CSV downloads (client-side JS)
 # -----------------------------------------------------------------------------
