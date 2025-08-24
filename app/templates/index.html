@@ -21,7 +21,6 @@
       #bamboo-label { margin-top: 12px; font-family: Georgia, serif; font-size: 16px; color: #104b1f; font-weight: 700; }
       /* container for app content */
       #bk-app { min-height: 100vh; display: block; }
-      
     </style>
   </head>
   <body>
@@ -32,7 +31,7 @@
     </div>
 
     <!-- Embed your named root from main.py (layout.name = 'app_root') -->
-    <div id="bk-app">{{ embed(roots.app_root) }}</div>
+    <div id="bk-app">{{ app_root }}</div>
 
 <script>
   (function() {
@@ -68,9 +67,8 @@
     // Safety fallback
     setTimeout(hide, 8000);
   })();
-</script>-
+</script>
   </body>
 </html>
-
 
 
