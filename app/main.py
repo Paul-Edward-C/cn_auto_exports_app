@@ -925,28 +925,26 @@ curdoc().title = "China — Trade: Snapshot & Series"
 
 # --- Loader: hide ONLY when real data arrives ---
 _hide_loader_now = CustomJS(code="""
-  for (const id of ['loader-overlay','bamboo-overlay','app-loader']) {
-    const el = document.getElementById(id);
-    if (el) {
-      el.style.opacity = '0';
-      el.style.pointerEvents = 'none';
-      el.style.display = 'none';
-    }
+  const el = document.getElementById('bamboo-overlay');
+  if (el) {
+    el.style.opacity = '0';
+    el.style.pointerEvents = 'none';
+    el.style.display = 'none';
   }
 """)
 geo_source.js_on_change('geojson', _hide_loader_now)
 series_source.js_on_change('data', _hide_loader_now)
 
-# --- Gentle fallback: after DOM is ready, hide if still visible (delayed) ---
 _fallback_hide = CustomJS(code="""
   setTimeout(() => {
-    for (const id of ['loader-overlay','bamboo-overlay','app-loader']) {
-      const el = document.getElementById(id);
-      if (el) { el.style.opacity = '0'; el.style.pointerEvents = 'none'; el.style.display = 'none'; }
+    const el = document.getElementById('bamboo-overlay');
+    if (el) { 
+      el.style.opacity = '0'; 
+      el.style.pointerEvents = 'none'; 
+      el.style.display = 'none'; 
     }
-  }, 6000);  // delay so the loader actually shows during boot
+  }, 6000);
 """)
-# bind the delayed fallback to any model (fires once when the doc is ready)
 p.js_on_event('document_ready', _fallback_hide)
 
 # --- Sync backgrounds on pan/zoom (unchanged) ---
