@@ -319,31 +319,6 @@ def _scale_values_for_map(flow, type_str):
             return vals.apply(lambda x: np.log1p(x) if pd.notnull(x) else np.nan).astype(float)
     return vals.astype(float)
 
-def add_bamboo_loader():
-    html = """
-    <div id="bamboo-overlay">
-    <div class="bamboo">
-    <span></span><span></span><span></span><span></span><span></span>
-    </div>
-    <div class="label">Loading…</div>
-    </div>
-    <style>
-    #bamboo-overlay{position:fixed;inset:0;background:rgba(255,255,255,0.96);
-    display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999}
-    #bamboo-overlay .bamboo{display:flex;gap:10px}
-    #bamboo-overlay .bamboo span{width:10px;height:70px;background:#228B22;border-radius:5px;
-    box-shadow:0 0 0 2px rgba(16,75,31,.15) inset;animation:grow 1.2s ease-in-out infinite}
-    #bamboo-overlay .bamboo span:nth-child(2){animation-delay:.1s}
-    #bamboo-overlay .bamboo span:nth-child(3){animation-delay:.2s}
-    #bamboo-overlay .bamboo span:nth-child(4){animation-delay:.3s}
-    #bamboo-overlay .bamboo span:nth-child(5){animation-delay:.4s}
-    @keyframes grow{0%,100%{transform:scaleY(.5)}50%{transform:scaleY(1.35)}}
-    #bamboo-overlay .label{margin-top:12px;font-family:Georgia,serif;font-size:16px;color:#104b1f;font-weight:700}
-    </style>
-    """
-    # width/height 0 so it doesn't consume layout space; it's fixed-positioned via CSS
-    return Div(text=html, width=0, height=0)
-
 
 
 # -----------------------------------------------------------------------------
@@ -871,6 +846,24 @@ layout.name = "app_root"
 curdoc().add_root(layout)
 curdoc().title = "China — Trade: Snapshot & Series"
 
+_hide_loader = CustomJS(code="""
+for (const id of ['loader-overlay','bamboo-overlay','app-loader']) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.style.opacity = '0';
+    el.style.pointerEvents = 'none';
+    el.style.display = 'none';
+  }
+}
+""")
+
+# Hide when the document hits "ready"
+for m in (p, top15_chart, series_chart):
+    m.js_on_event(DocumentReady, _hide_loader)
+
+# Also hide as soon as first data lands
+geo_source.js_on_change('geojson', _hide_loader)
+series_source.js_on_change('data', _hide_loader)
 
 # Sync backgrounds on pan/zoom
 p.x_range.on_change('start', _sync_map_bg)
