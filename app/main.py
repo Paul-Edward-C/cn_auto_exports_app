@@ -749,7 +749,7 @@ pause_button.on_click(_pause)
 # -----------------------------------------------------------------------------
 app_title = Div(
     text="Mapping China's foreign trade",
-    styles={"font-family":"Georgia, serif","font-size":"26px","font-weight":"bold","color":"#104b1f","margin-bottom":"14px"}
+    styles={"font-family":"Georgia, serif","font-size":"32px","font-weight":"bold","color":"#104b1f","margin-bottom":"20px"}
 )
 
 snapshot_heading = Div(
