@@ -271,8 +271,6 @@ color_bar = ColorBar(color_mapper=color_mapper_obj, label_standoff=12, location=
 p.add_layout(color_bar, 'right')
 p.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen', text=f"www.eastasiaecon.com/cn/#charts"))
 p.xaxis.axis_label = f'Source: CCA, EEA'
-p.toolbar_location = "right"
-
 patches = p.patches('xs', 'ys', source=geo_source, fill_color='custom_color',
     fill_alpha=0.7, line_color="gray", line_width=0.5)
 hover = p.select_one(HoverTool)
@@ -491,8 +489,6 @@ style_div = Div(text=style)
 top_selectors_row = row(select_type, select_value_type, sizing_mode="fixed")
 bottom_selector_row = row(select_country, sizing_mode="fixed")
 top15_buttons_row = row(top15_button, download_top15_button, reset_button, sizing_mode="fixed")
-
-
 
 top15_col = column(
     top15_buttons_row,
