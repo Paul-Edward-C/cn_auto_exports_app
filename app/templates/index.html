@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="loader-template-active" content="yes">
+    <title>{{ title }}</title>
+    {{ bokeh_css }}
+    {{ bokeh_js }}
+    <style>
+      html, body { height: 100%; margin: 0; }
+      /* Full‑page bamboo loader */
+      #bamboo-overlay { position: fixed; inset: 0; background: rgba(255,255,255,0.96); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 99999; transition: opacity .35s ease; }
+      #bamboo { display: flex; gap: 10px; }
+      #bamboo span { width: 10px; height: 72px; background: #228B22; border-radius: 5px; box-shadow: 0 0 0 2px rgba(16,75,31,.15) inset; animation: grow 1.2s ease-in-out infinite; }
+      #bamboo span:nth-child(2){ animation-delay: .1s }
+      #bamboo span:nth-child(3){ animation-delay: .2s }
+      #bamboo span:nth-child(4){ animation-delay: .3s }
+      #bamboo span:nth-child(5){ animation-delay: .4s }
+      @keyframes grow { 0%,100% { transform: scaleY(.5) } 50% { transform: scaleY(1.35) } }
+      #bamboo-label { margin-top: 12px; font-family: Georgia, serif; font-size: 16px; color: #104b1f; font-weight: 700; }
+      /* container for app content */
+      #bk-app { min-height: 100vh; display: block; }
+    </style>
+  </head>
+  <body>
+    <!-- Loader shown immediately while Bokeh boots / connects -->
+    <div id="bamboo-overlay" aria-live="polite">
+      <div id="bamboo"><span></span><span></span><span></span><span></span><span></span></div>
+      <div id="bamboo-label">Loading…</div>
+    </div>
+
+    <!-- Embed your named root from main.py (layout.name = 'app_root') -->
+    <div id="bk-app">{{ app_root }}</div>
+
+<script>
+  (function() {
+    const overlay = document.getElementById('bamboo-overlay');
+    if (!overlay) return;
+
+    const shownAt = performance.now();
+    const MIN_SHOW_MS = 600; // ensure at least ~0.6s visibility
+
+    function hide() {
+      const elapsed = performance.now() - shownAt;
+      const wait = Math.max(0, MIN_SHOW_MS - elapsed);
+      setTimeout(() => {
+        overlay.style.opacity = '0';
+        setTimeout(() => { overlay.style.display = 'none'; }, 380);
+      }, wait);
+    }
+
+    function ready() {
+      const roots = document.querySelectorAll('.bk-root');
+      if (!roots.length) return false;
+      return Array.from(roots).some(r => r.offsetWidth > 0 && r.offsetHeight > 0);
+    }
+
+    const mo = new MutationObserver(() => { if (ready()) { hide(); mo.disconnect(); } });
+    mo.observe(document.body, { childList: true, subtree: true });
+
+    let tries = 0;
+    const t = setInterval(() => {
+      if (ready() || ++tries > 250) { hide(); clearInterval(t); }
+    }, 40);
+
+    // Safety fallback
+    setTimeout(hide, 8000);
+  })();
+</script>
+  </body>
+</html>
+
+
