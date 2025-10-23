@@ -1,5 +1,7 @@
 # app/main.py
 
+# app/main.py
+
 import json
 import re
 import difflib
@@ -525,6 +527,44 @@ for b in (top15_button, download_top15_button, download_series_button):
 reset_button.css_classes = ["icon-btn"]
 
 # -----------------------------------------------------------------------------
+# New: Category options dependent on Product (and optionally flow/type)
+# -----------------------------------------------------------------------------
+def available_categories_for_combo(flow, product, type_str=None):
+    """Return sorted list of product categories available for the given flow/product.
+       If type_str provided, filter by type too; otherwise include all types."""
+    cats = set()
+    for (f, c, p, pc, t) in key_to_col.keys():
+        if f == flow and p == product:
+            if type_str is None or t == type_str:
+                cats.add(pc)
+    if not cats:
+        # fallback to global product_cats if none found for the combo
+        return sorted(list(product_cats))
+    return sorted(list(cats))
+
+def _update_snapshot_category_options():
+    flow, product, product_cat, type_str = cur_snap()
+    cats = available_categories_for_combo(flow, product, type_str)
+    s_product_cat.options = cats
+    # keep current selection if it's still valid
+    if s_product_cat.value not in cats:
+        # try to preserve a sensible default (previous default or first of cats)
+        if default_product_cat in cats:
+            s_product_cat.value = default_product_cat
+        else:
+            s_product_cat.value = cats[0] if cats else default_product_cat
+
+def _update_series_category_options():
+    flow, country, product, product_cat, type_str = cur_series()
+    cats = available_categories_for_combo(flow, product, type_str)
+    x_product_cat.options = cats
+    if x_product_cat.value not in cats:
+        if default_product_cat in cats:
+            x_product_cat.value = default_product_cat
+        else:
+            x_product_cat.value = cats[0] if cats else default_product_cat
+
+# -----------------------------------------------------------------------------
 # Snapshot (map) update
 # -----------------------------------------------------------------------------
 no_map_div = Div(text="", width=980, height=20)
@@ -676,6 +716,8 @@ def _get_series_timeseries(flow, country, product, product_cat, type_str):
 
 def _update_series_country_options():
     flow, _, product, product_cat, type_str = cur_series()
+    # update category options for series side (dependent on product)
+    _update_series_category_options()
     cs = sorted(list(set(available_countries_for_combo(flow, product, product_cat, type_str)) | {"World"}))
     x_country_sel.options = cs
     if x_country_sel.value not in cs:
@@ -707,6 +749,15 @@ def _refresh_snapshot_for_current_index(attr, old, new):
 for w in (s_flow, s_product, s_product_cat, s_type):
     w.on_change('value', _refresh_snapshot_for_current_index)
 
+# When product (or flow/type) changes on the snapshot side, update category choices first
+def _on_snapshot_product_change(attr, old, new):
+    _update_snapshot_category_options()
+    _refresh_snapshot_for_current_index(attr, old, new)
+
+s_product.on_change('value', _on_snapshot_product_change)
+s_flow.on_change('value', lambda a, o, n: _on_snapshot_product_change(a, o, n))
+s_type.on_change('value', lambda a, o, n: _on_snapshot_product_change(a, o, n))
+
 top15_button.on_click(highlight_top15)
 reset_button.on_click(reset_top15)
 
@@ -715,6 +766,7 @@ def on_month_slider(attr, old, new):
 month_slider.on_change('value', on_month_slider)
 
 def on_series_selector_change(attr, old, new):
+    # ensure category options are updated when product/flow/type changes
     _update_series_country_options()
     update_series_view()
 for w in (x_flow, x_product, x_product_cat, x_type):
@@ -912,8 +964,7 @@ def _sync_map_bg(attr, old, new):
 def _sync_series_bg(attr, old, new):
     bg_series_src.data.update(
         x=[series_chart.x_range.start], y=[series_chart.y_range.start],
-        w=[series_chart.x_range.end - series_chart.x_range.start],
-        h=[series_chart.y_range.end - series_chart.y_range.start],
+        w=[series_chart.x_range.end - series_chart.x_range.start], h=[series_chart.y_range.end - series_chart.y_range.start],
     )
 
 # -----------------------------------------------------------------------------
@@ -958,6 +1009,9 @@ series_chart.y_range.on_change('start', _sync_series_bg)
 series_chart.y_range.on_change('end',   _sync_series_bg)
 
 # --- Initial data fill (unchanged) ---
+# ensure category options respect initial product selections
+_update_snapshot_category_options()
+_update_series_category_options()
 if len(DATE_LIST) > 0:
     month_slider.value = len(DATE_LIST) - 1
     update_snapshot_by_index(month_slider.value)
