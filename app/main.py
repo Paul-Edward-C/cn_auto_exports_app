@@ -216,7 +216,7 @@ def pick_default(options, preferred=None):
 default_flow        = pick_default(flows, 'Exports')
 default_product     = pick_default(products, 'Autos')
 default_product_cat = pick_default(product_cats, 'Total')
-default_type        = pick_default(types_set, 'USD m')
+default_type        = pick_default(types_set, 'USD bn')
 
 # -----------------------------------------------------------------------------
 # COUNTRY MATCHING for MAP
@@ -531,14 +531,23 @@ reset_button.css_classes = ["icon-btn"]
 # -----------------------------------------------------------------------------
 def available_categories_for_combo(flow, product, type_str=None):
     """Return sorted list of product categories available for the given flow/product.
-       If type_str provided, filter by type too; otherwise include all types."""
+       Try first to filter by unit (type_str) when provided; if that yields nothing,
+       fall back to ignoring the unit so we still limit by flow+product."""
+    # First pass: filter including type if provided
     cats = set()
     for (f, c, p, pc, t) in key_to_col.keys():
         if f == flow and p == product:
             if type_str is None or t == type_str:
                 cats.add(pc)
+
+    # If nothing found and type_str was provided, try again without unit filter
+    if not cats and type_str is not None:
+        for (f, c, p, pc, t) in key_to_col.keys():
+            if f == flow and p == product:
+                cats.add(pc)
+
     if not cats:
-        # fallback to global product_cats if none found for the combo
+        # ultimate fallback to global product_cats (same as before)
         return sorted(list(product_cats))
     return sorted(list(cats))
 
