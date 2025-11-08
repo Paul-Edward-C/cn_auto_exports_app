@@ -269,6 +269,71 @@ filtered_world["ADMIN_DISPLAY"] = filtered_world["ADMIN"].replace(terms_dict)
 
 
 # -----------------------------------------------------------------------------
+# PERFORMANCE: Precompute admin values cache
+# -----------------------------------------------------------------------------
+# Build cache structure: {(flow, product, product_cat, type_str): {date_idx: {admin_name: value}}}
+# This eliminates the need to scan DataFrame on each selector change
+print("[BOOT] Building admin_values_cache...")
+import time
+_cache_start = time.time()
+
+admin_values_cache = {}
+
+# Get all valid combinations from key_to_col
+valid_combos = set()
+for (flow, country, product, product_cat, unit) in key_to_col.keys():
+    valid_combos.add((flow, product, product_cat, unit))
+
+# For each valid combo, precompute values for all dates and admin regions using vectorized operations
+for combo in valid_combos:
+    flow, product, product_cat, type_str = combo
+    cache_key = combo
+    
+    # Build a mapping from admin_name to column name for this combo
+    admin_to_col = {}
+    for admin_name, df_country in admin_to_df_map.items():
+        if df_country is not None:
+            key = (flow, df_country, product, product_cat, type_str)
+            col = key_to_col.get(key)
+            if col and col in df.columns:
+                admin_to_col[admin_name] = col
+    
+    # If no columns found for this combo, skip
+    if not admin_to_col:
+        admin_values_cache[cache_key] = {}
+        continue
+    
+    # Extract all relevant columns at once (vectorized)
+    relevant_cols = list(admin_to_col.values())
+    if relevant_cols:
+        subset = df[relevant_cols].values  # numpy array for fast access
+        col_to_idx = {col: idx for idx, col in enumerate(relevant_cols)}
+        
+        # Build cache for all dates at once
+        date_caches = {}
+        for date_idx in range(len(df)):
+            date_cache = {}
+            for admin_name, col in admin_to_col.items():
+                col_idx = col_to_idx[col]
+                val = subset[date_idx, col_idx]
+                date_cache[admin_name] = float(val) if pd.notna(val) else np.nan
+            
+            # Add NaN for admin regions without data
+            for admin_name in admin_to_df_map.keys():
+                if admin_name not in date_cache:
+                    date_cache[admin_name] = np.nan
+            
+            date_caches[date_idx] = date_cache
+        
+        admin_values_cache[cache_key] = date_caches
+    else:
+        admin_values_cache[cache_key] = {}
+
+_cache_elapsed = time.time() - _cache_start
+print(f"[BOOT] admin_values_cache built: {len(admin_values_cache)} combos, {len(df)} dates in {_cache_elapsed:.2f}s")
+
+
+# -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
 def available_countries_for_combo(flow, product, product_cat, type_str):
@@ -610,19 +675,26 @@ def update_snapshot_by_index(i: int):
     row = df.iloc[row_idx]
     row_date = pd.to_datetime(row[date_col]).strftime("%b %Y")
 
-    country_exports = {}
-    for admin_name, df_country in admin_to_df_map.items():
-        key = (flow, df_country, product, product_cat, type_str)
-        col = key_to_col.get(key)
-        if col and col in df.columns:
-            try:
-                val = float(row[col])
-            except Exception:
+    # PERFORMANCE: Use precomputed cache instead of DataFrame lookups
+    cache_key = (flow, product, product_cat, type_str)
+    if cache_key in admin_values_cache and row_idx in admin_values_cache[cache_key]:
+        country_exports = admin_values_cache[cache_key][row_idx]
+    else:
+        # Fallback for combos not in cache (shouldn't happen normally)
+        country_exports = {}
+        for admin_name, df_country in admin_to_df_map.items():
+            key = (flow, df_country, product, product_cat, type_str)
+            col = key_to_col.get(key)
+            if col and col in df.columns:
+                try:
+                    val = float(row[col])
+                except Exception:
+                    val = np.nan
+            else:
                 val = np.nan
-        else:
-            val = np.nan
-        country_exports[admin_name] = val
+            country_exports[admin_name] = val
 
+    # Fast vectorized mapping with pandas .map()
     filtered_world["exports"] = filtered_world["ADMIN"].map(country_exports)
 
     world_only_now = filtered_world["exports"].notna().sum() == 0
@@ -643,7 +715,8 @@ def update_snapshot_by_index(i: int):
     else:
         vmin, vmax = 0.0, 1.0
 
-    filtered_world["note"] = filtered_world["exports"].apply(lambda x: "No Data" if pd.isnull(x) else "")
+    # Fast vectorized note assignment using numpy where
+    filtered_world["note"] = np.where(pd.isnull(filtered_world["exports"]), "No Data", "")
     filtered_world.loc[filtered_world["ADMIN"] == "China", "note"] = "Exporter (no data)"
     filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
 
