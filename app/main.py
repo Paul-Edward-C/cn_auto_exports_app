@@ -29,6 +29,20 @@ from bokeh.layouts import column, row
 from bokeh.themes import Theme
 from bokeh.events import DocumentReady
 
+from tornado.web import RequestHandler
+
+def get_tier_from_request():
+    try:
+        handler: RequestHandler = curdoc().session_context.request
+        if handler is not None:
+            tier = handler.get_argument("tier", "public").lower()
+            return tier
+    except Exception:
+        pass
+    return "public"
+
+tier = get_tier_from_request()
+
 # -----------------------------------------------------------------------------
 # Paths
 # -----------------------------------------------------------------------------
@@ -947,6 +961,37 @@ layout = column(
     sizing_mode="fixed",
     width=layout_total_w,
 )
+
+tier = get_tier_from_request()
+
+ALLOWED_MEMBER_SERIES = [
+    ("Exports", "Japan", "Autos", "Total", "USD bn"),
+    ("Exports", "Korea, Rep.", "Autos", "Total", "USD bn"),
+    ("Exports", "Australia", "Autos", "Total", "USD bn"),
+    ("Exports", "Germany", "Autos", "Total", "USD bn"),
+]
+
+if tier == "member":
+    x_country_sel.options = [item[1] for item in ALLOWED_MEMBER_SERIES]
+    series_table.visible = False
+    download_series_button.visible = False
+    top15_table.visible = False
+    download_top15_button.visible = False
+
+elif tier == "daily":
+    # Show all series, but hide tables/downloads
+    series_table.visible = False
+    download_series_button.visible = False
+    top15_table.visible = False
+    download_top15_button.visible = False
+
+else:  # public
+    # Full access
+    # (already set from your default widget logic)
+    series_table.visible = True
+    download_series_button.visible = True
+    top15_table.visible = True
+    download_top15_button.visible = True
 # -----------------------------------------------------------------------------
 # Background image syncing (Python-side, safe on Heroku)
 # -----------------------------------------------------------------------------
