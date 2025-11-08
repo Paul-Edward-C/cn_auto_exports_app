@@ -1,6 +1,5 @@
 # app/main.py
 
-# app/main.py
 
 import json
 import re
@@ -953,17 +952,27 @@ series_section = column(
 
 # PAGE ------------------------------------------------------------------------
 layout_total_w = max(snapshot_row_total_w, series_row_total_w)
+
+
+public_notice = Div(
+    text="Public access is limited to Autos data only.<br>Sign up or log in for access to full data and features.",
+    width=980,
+    styles={'color':'#B7410E', 'font-family':'Georgia,serif', 'font-size':'18px', 'margin-top':'14px', 'font-weight':'bold'}
+)
+public_notice.visible = False
+
+
 layout = column(
     app_title,
     snapshot_section,
     series_section,
+    public_notice,
     app_footnote,
     sizing_mode="fixed",
     width=layout_total_w,
 )
 
 tier = get_tier_from_request()
-
 ALLOWED_MEMBER_SERIES = [
     ("Exports", "Japan", "Autos", "Total", "USD bn"),
     ("Exports", "Korea, Rep.", "Autos", "Total", "USD bn"),
@@ -971,27 +980,51 @@ ALLOWED_MEMBER_SERIES = [
     ("Exports", "Germany", "Autos", "Total", "USD bn"),
 ]
 
-if tier == "member":
-    x_country_sel.options = [item[1] for item in ALLOWED_MEMBER_SERIES]
-    series_table.visible = False
-    download_series_button.visible = False
-    top15_table.visible = False
-    download_top15_button.visible = False
+def restrict_features_by_tier():
+    # Hide/show and restrict based on tier
+    if tier == "member":
+        x_country_sel.options = [item[1] for item in ALLOWED_MEMBER_SERIES]
+        series_table.visible = False
+        download_series_button.visible = False
+        top15_table.visible = False
+        download_top15_button.visible = False
+        public_notice.visible = False
+    elif tier == "daily":
+        series_table.visible = False
+        download_series_button.visible = False
+        top15_table.visible = False
+        download_top15_button.visible = False
+        public_notice.visible = False
+    else:  # public: only autos data, show notice if restricted
+        # Choose "Autos" only for public
+        if x_product.value != "Autos":
+            x_product.value = "Autos"
+        # Optionally restrict all selectors to autos/exports/total/usd bn for public
+        x_flow.value = "Exports"
+        x_product_cat.value = "Total"
+        x_type.value = "USD bn"
+        # Ensure only allowed countries for public tier, or all if you wish
+        # You can optionally set x_country_sel.options = sorted(['World'] + available_countries_for_combo("Exports", "Autos", "Total", "USD bn"))
+        # UI notice logic
+        series_table.visible = True
+        download_series_button.visible = True
+        top15_table.visible = True
+        download_top15_button.visible = True
+        public_notice.visible = True
 
-elif tier == "daily":
-    # Show all series, but hide tables/downloads
-    series_table.visible = False
-    download_series_button.visible = False
-    top15_table.visible = False
-    download_top15_button.visible = False
+restrict_features_by_tier()
 
-else:  # public
-    # Full access
-    # (already set from your default widget logic)
-    series_table.visible = True
-    download_series_button.visible = True
-    top15_table.visible = True
-    download_top15_button.visible = True
+# --- Update callbacks to re-evaluate restrictions if needed ---
+def on_tier_sensitive_change(attr, old, new):
+    restrict_features_by_tier()
+    update_series_view()
+    update_snapshot_by_index(int(month_slider.value))
+
+for w in (x_flow, x_product, x_product_cat, x_type, x_country_sel):
+    w.on_change('value', on_tier_sensitive_change)
+for w in (s_flow, s_product, s_product_cat, s_type):
+    w.on_change('value', on_tier_sensitive_change)
+month_slider.on_change('value', on_tier_sensitive_change)
 # -----------------------------------------------------------------------------
 # Background image syncing (Python-side, safe on Heroku)
 # -----------------------------------------------------------------------------
