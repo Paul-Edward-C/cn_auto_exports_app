@@ -54,33 +54,36 @@ WORLD_GEOJSON = DATA_DIR / "ne_10m_admin_0_countries.geojson"
 
 # -----------------------------------------------------------------------------
 # Load world geometry (Heroku-safe: prefer GeoJSON; shapefile if available)
+# Memory optimization: Store full world data but only process subset initially
 # -----------------------------------------------------------------------------
-world = None
+world_full = None  # Full world data (not processed)
+world = None  # Working subset (top-15 or all)
 _using_gpd = False
+_world_geojson_data = None  # Cache raw GeoJSON for lazy loading
 
 try:
     if WORLD_GEOJSON.exists():
         with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
-            gj = json.load(f)
-        world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
+            _world_geojson_data = json.load(f)
+        world_full = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in _world_geojson_data["features"]])
         _using_gpd = False
     elif gpd is not None and WORLD_SHP.exists():
-        world = gpd.read_file(WORLD_SHP.as_posix())
+        world_full = gpd.read_file(WORLD_SHP.as_posix())
         _using_gpd = True
     else:
         raise FileNotFoundError("No world shapefile/geojson found in data/")
 except Exception as e:
     if WORLD_GEOJSON.exists():
         with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
-            gj = json.load(f)
-        world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
+            _world_geojson_data = json.load(f)
+        world_full = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in _world_geojson_data["features"]])
         _using_gpd = False
     else:
         raise RuntimeError(f"Failed to load world geometry: {e}")
 
 # Normalize geometry column name so downstream code can always use 'geometry'
-if not _using_gpd and 'geometry' not in world.columns and '__geom' in world.columns:
-    world = world.rename(columns={'__geom': 'geometry'})
+if not _using_gpd and 'geometry' not in world_full.columns and '__geom' in world_full.columns:
+    world_full = world_full.rename(columns={'__geom': 'geometry'})
 
 # Helper to compute bounds when using plain GeoJSON (no GeoPandas)
 def _geom_bounds_list(geom):
@@ -279,6 +282,7 @@ default_type        = pick_default(types_set, 'USD bn')
 
 # -----------------------------------------------------------------------------
 # COUNTRY MATCHING for MAP
+# Memory optimization: Build full list but only load top-15 initially
 # -----------------------------------------------------------------------------
 country_list = sorted([c for c in countries if c != 'World'])
 
@@ -286,23 +290,24 @@ def has_match(admin_name):
     match = difflib.get_close_matches(admin_name, country_list, n=1, cutoff=0.7)
     return bool(match)
 
-filtered_world = world[world['ADMIN'].apply(has_match)].reset_index(drop=True)
-if 'geometry' not in filtered_world.columns and '__geom' in filtered_world.columns:
-    filtered_world = filtered_world.rename(columns={'__geom': 'geometry'})
+# Build the full filtered world data (all matched countries)
+filtered_world_all = world_full[world_full['ADMIN'].apply(has_match)].reset_index(drop=True)
+if 'geometry' not in filtered_world_all.columns and '__geom' in filtered_world_all.columns:
+    filtered_world_all = filtered_world_all.rename(columns={'__geom': 'geometry'})
 
-admin_to_df_map = {}
-for admin_name in filtered_world['ADMIN']:
+# Build admin to data country mapping for all countries
+admin_to_df_map_all = {}
+for admin_name in filtered_world_all['ADMIN']:
     match = difflib.get_close_matches(admin_name, country_list, n=1, cutoff=0.7)
-    admin_to_df_map[admin_name] = match[0] if match else None
+    admin_to_df_map_all[admin_name] = match[0] if match else None
 
 # add China row if missing (for consistent note)
-if not (filtered_world["ADMIN"] == "China").any():
-    china_row = world[world["ADMIN"] == "China"]
+if not (filtered_world_all["ADMIN"] == "China").any():
+    china_row = world_full[world_full["ADMIN"] == "China"]
     if not china_row.empty:
         if 'geometry' not in china_row.columns and '__geom' in china_row.columns:
             china_row = china_row.rename(columns={'__geom': 'geometry'})
-        filtered_world = pd.concat([filtered_world, china_row], ignore_index=True)
-
+        filtered_world_all = pd.concat([filtered_world_all, china_row], ignore_index=True)
 
 terms_dict = {
     "United States of America": "US",
@@ -311,72 +316,125 @@ terms_dict = {
     "Hong Kong S.A.R" : 'Hong Kong'
 }
 
-filtered_world["ADMIN_DISPLAY"] = filtered_world["ADMIN"].replace(terms_dict)
+filtered_world_all["ADMIN_DISPLAY"] = filtered_world_all["ADMIN"].replace(terms_dict)
+
+# Function to determine top N countries by aggregate export value
+def get_top_n_countries(n=15):
+    """Determine top N countries by aggregate export values across all data."""
+    # Aggregate exports for all countries across all time periods
+    country_totals = {}
+    
+    for admin_name, df_country in admin_to_df_map_all.items():
+        if df_country is None or df_country == 'World':
+            continue
+        
+        total = 0
+        # Sum across all combinations for this country
+        for key, col in key_to_col.items():
+            flow, country, product, product_cat, unit = key
+            if country == df_country:
+                if col in df.columns:
+                    vals = pd.to_numeric(df[col], errors='coerce')
+                    total += vals.sum()
+        
+        if total > 0:
+            country_totals[admin_name] = total
+    
+    # Sort and get top N
+    sorted_countries = sorted(country_totals.items(), key=lambda x: x[1], reverse=True)
+    top_admins = [admin for admin, _ in sorted_countries[:n]]
+    
+    # Always include China for the note
+    if "China" not in top_admins and (filtered_world_all["ADMIN"] == "China").any():
+        top_admins.append("China")
+    
+    return top_admins
+
+# Initialize with top 15 countries to save memory
+print("[BOOT] Computing top 15 countries...")
+top_15_admins = get_top_n_countries(15)
+filtered_world = filtered_world_all[filtered_world_all['ADMIN'].isin(top_15_admins)].copy().reset_index(drop=True)
+admin_to_df_map = {admin: admin_to_df_map_all[admin] for admin in filtered_world['ADMIN'] if admin in admin_to_df_map_all}
+
+print(f"[BOOT] Initial load: {len(filtered_world)} countries (top 15 + China)")
 
 
 # -----------------------------------------------------------------------------
 # PERFORMANCE: Precompute admin values cache
+# Memory optimization: Cache only top-15 initially, build full cache on demand
 # -----------------------------------------------------------------------------
 # Build cache structure: {(flow, product, product_cat, type_str): {date_idx: {admin_name: value}}}
 # This eliminates the need to scan DataFrame on each selector change
-print("[BOOT] Building admin_values_cache...")
+print("[BOOT] Building admin_values_cache for top 15...")
 import time
 _cache_start = time.time()
 
+# Track current mode
+_current_mode = "top15"  # "top15" or "all"
 admin_values_cache = {}
+admin_values_cache_all = None  # Lazy-loaded cache for all countries
 
-# Get all valid combinations from key_to_col
-valid_combos = set()
-for (flow, country, product, product_cat, unit) in key_to_col.keys():
-    valid_combos.add((flow, product, product_cat, unit))
+def _build_cache_for_admin_map(admin_map):
+    """Build admin values cache for given admin_to_df_map."""
+    cache = {}
+    
+    # Get all valid combinations from key_to_col
+    valid_combos = set()
+    for (flow, country, product, product_cat, unit) in key_to_col.keys():
+        valid_combos.add((flow, product, product_cat, unit))
+    
+    # For each valid combo, precompute values for all dates and admin regions using vectorized operations
+    for combo in valid_combos:
+        flow, product, product_cat, type_str = combo
+        cache_key = combo
+        
+        # Build a mapping from admin_name to column name for this combo
+        admin_to_col = {}
+        for admin_name, df_country in admin_map.items():
+            if df_country is not None:
+                key = (flow, df_country, product, product_cat, type_str)
+                col = key_to_col.get(key)
+                if col and col in df.columns:
+                    admin_to_col[admin_name] = col
+        
+        # If no columns found for this combo, skip
+        if not admin_to_col:
+            cache[cache_key] = {}
+            continue
+        
+        # Extract all relevant columns at once (vectorized)
+        relevant_cols = list(admin_to_col.values())
+        if relevant_cols:
+            subset = df[relevant_cols].values  # numpy array for fast access
+            col_to_idx = {col: idx for idx, col in enumerate(relevant_cols)}
+            
+            # Build cache for all dates at once
+            date_caches = {}
+            for date_idx in range(len(df)):
+                date_cache = {}
+                for admin_name, col in admin_to_col.items():
+                    col_idx = col_to_idx[col]
+                    val = subset[date_idx, col_idx]
+                    date_cache[admin_name] = float(val) if pd.notna(val) else np.nan
+                
+                # Add NaN for admin regions without data
+                for admin_name in admin_map.keys():
+                    if admin_name not in date_cache:
+                        date_cache[admin_name] = np.nan
+                
+                date_caches[date_idx] = date_cache
+            
+            cache[cache_key] = date_caches
+        else:
+            cache[cache_key] = {}
+    
+    return cache
 
-# For each valid combo, precompute values for all dates and admin regions using vectorized operations
-for combo in valid_combos:
-    flow, product, product_cat, type_str = combo
-    cache_key = combo
-    
-    # Build a mapping from admin_name to column name for this combo
-    admin_to_col = {}
-    for admin_name, df_country in admin_to_df_map.items():
-        if df_country is not None:
-            key = (flow, df_country, product, product_cat, type_str)
-            col = key_to_col.get(key)
-            if col and col in df.columns:
-                admin_to_col[admin_name] = col
-    
-    # If no columns found for this combo, skip
-    if not admin_to_col:
-        admin_values_cache[cache_key] = {}
-        continue
-    
-    # Extract all relevant columns at once (vectorized)
-    relevant_cols = list(admin_to_col.values())
-    if relevant_cols:
-        subset = df[relevant_cols].values  # numpy array for fast access
-        col_to_idx = {col: idx for idx, col in enumerate(relevant_cols)}
-        
-        # Build cache for all dates at once
-        date_caches = {}
-        for date_idx in range(len(df)):
-            date_cache = {}
-            for admin_name, col in admin_to_col.items():
-                col_idx = col_to_idx[col]
-                val = subset[date_idx, col_idx]
-                date_cache[admin_name] = float(val) if pd.notna(val) else np.nan
-            
-            # Add NaN for admin regions without data
-            for admin_name in admin_to_df_map.keys():
-                if admin_name not in date_cache:
-                    date_cache[admin_name] = np.nan
-            
-            date_caches[date_idx] = date_cache
-        
-        admin_values_cache[cache_key] = date_caches
-    else:
-        admin_values_cache[cache_key] = {}
+# Build initial cache for top 15 only
+admin_values_cache = _build_cache_for_admin_map(admin_to_df_map)
 
 _cache_elapsed = time.time() - _cache_start
-print(f"[BOOT] admin_values_cache built: {len(admin_values_cache)} combos, {len(df)} dates in {_cache_elapsed:.2f}s")
+print(f"[BOOT] admin_values_cache built: {len(admin_values_cache)} combos, {len(df)} dates, {len(filtered_world)} countries in {_cache_elapsed:.2f}s")
 
 
 # -----------------------------------------------------------------------------
@@ -717,6 +775,8 @@ def _row_for_index(i: int) -> int:
     return DATE_ROW_IDXS[i]
 
 def update_snapshot_by_index(i: int):
+    global filtered_world, admin_to_df_map, admin_values_cache, _current_mode, admin_values_cache_all
+    
     i = int(np.clip(i, 0, len(DATE_LIST)-1))
     _set_slider_title(i)
 
@@ -724,6 +784,42 @@ def update_snapshot_by_index(i: int):
     row_idx = _row_for_index(i)
     row = df.iloc[row_idx]
     row_date = pd.to_datetime(row[date_col]).strftime("%b %Y")
+    
+    # Determine which mode to use based on toggle
+    show_all = 0 in show_all_toggle.active
+    
+    # Switch data/cache if mode changed
+    if show_all and _current_mode == "top15":
+        print("[SWITCH] Loading all countries...")
+        _switch_start = time.time()
+        
+        # Switch to all countries
+        filtered_world = filtered_world_all.copy()
+        admin_to_df_map = admin_to_df_map_all.copy()
+        
+        # Build cache for all countries if not already built
+        if admin_values_cache_all is None:
+            print("[CACHE] Building cache for all countries...")
+            admin_values_cache_all = _build_cache_for_admin_map(admin_to_df_map_all)
+        
+        admin_values_cache = admin_values_cache_all
+        _current_mode = "all"
+        
+        _switch_elapsed = time.time() - _switch_start
+        print(f"[SWITCH] Loaded {len(filtered_world)} countries in {_switch_elapsed:.2f}s")
+        
+    elif not show_all and _current_mode == "all":
+        print("[SWITCH] Switching back to top 15...")
+        
+        # Switch back to top 15
+        filtered_world = filtered_world_all[filtered_world_all['ADMIN'].isin(top_15_admins)].copy().reset_index(drop=True)
+        admin_to_df_map = {admin: admin_to_df_map_all[admin] for admin in filtered_world['ADMIN'] if admin in admin_to_df_map_all}
+        
+        # Rebuild cache for top 15 (it's fast enough)
+        admin_values_cache = _build_cache_for_admin_map(admin_to_df_map)
+        _current_mode = "top15"
+        
+        print(f"[SWITCH] Switched back to {len(filtered_world)} countries")
 
     # PERFORMANCE: Use precomputed cache instead of DataFrame lookups
     cache_key = (flow, product, product_cat, type_str)
@@ -769,46 +865,11 @@ def update_snapshot_by_index(i: int):
     filtered_world["note"] = np.where(pd.isnull(filtered_world["exports"]), "No Data", "")
     filtered_world.loc[filtered_world["ADMIN"] == "China", "note"] = "Exporter (no data)"
     
-    # Determine which countries to show based on toggle
-    show_all = 0 in show_all_toggle.active
+    # Color all countries (no subsetting - we already loaded only the ones we want)
+    filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
     
-    if show_all:
-        # Show all countries with data
-        filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
-        df_to_render = filtered_world
-    else:
-        # Default: show only top 15 by export value
-        valid_idx = np.where(np.isfinite(exports_log))[0]
-        if len(valid_idx) > 15:
-            top15_idx = valid_idx[np.argpartition(-exports_log[valid_idx], 15)[:15]]
-        else:
-            top15_idx = valid_idx
-        
-        # Compute color scale based on top 15 only
-        if len(top15_idx) > 0:
-            top15_vmin = float(np.nanmin(exports_log[top15_idx]))
-            top15_vmax = float(np.nanmax(exports_log[top15_idx]))
-            if not np.isfinite(top15_vmin): top15_vmin = 0.0
-            if not np.isfinite(top15_vmax): top15_vmax = 1.0
-            if top15_vmax == top15_vmin: top15_vmax = top15_vmin + 1.0
-        else:
-            top15_vmin, top15_vmax = 0.0, 1.0
-        
-        # Set colors: gray for non-top15, palette for top15
-        colors = np.full(filtered_world.shape[0], "#dddddd", dtype=object)
-        if len(top15_idx) > 0:
-            norm = (exports_log[top15_idx] - top15_vmin) / (top15_vmax - top15_vmin)
-            idx = (np.clip(norm, 0, 1) * (len(smooth_palette) - 1)).round().astype(int)
-            for i, ci in enumerate(top15_idx):
-                colors[ci] = smooth_palette[int(idx[i])]
-        
-        filtered_world["custom_color"] = colors
-        # Use top15 scale for color bar when in default mode
-        vmin, vmax = top15_vmin, top15_vmax
-        df_to_render = filtered_world
-
-    # Update patch source with new data
-    patch_source.data = world_to_patch_data(df_to_render)
+    # Update patch source with new data (only contains filtered_world countries)
+    patch_source.data = world_to_patch_data(filtered_world)
 
     p.title.text = f"China, {flow}, {product}, {product_cat}, {type_str}, {row_date}"
     color_mapper_obj.low = vmin
