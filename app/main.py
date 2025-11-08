@@ -48,7 +48,7 @@ tier = get_tier_from_request()
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 
-DF_PATH = DATA_DIR / "auto_total.csv"
+DF_PATH = DATA_DIR / "auto_total.parquet"
 WORLD_SHP = DATA_DIR / "ne_10m_admin_0_countries.shp"
 WORLD_GEOJSON = DATA_DIR / "ne_10m_admin_0_countries.geojson"
 
@@ -155,7 +155,7 @@ formatter = HTMLTemplateFormatter(template="""
 # -----------------------------------------------------------------------------
 # DATA LOAD
 # -----------------------------------------------------------------------------
-df = pd.read_csv(DF_PATH.as_posix())
+df = pd.read_parquet(DF_PATH.as_posix(), engine='pyarrow')
 
 def _normalize_header(s: str) -> str:
     s = (s or "")
@@ -168,7 +168,7 @@ df.columns = [_normalize_header(c) for c in df.columns]
 # Detect & prepare date column
 date_col = next((c for c in df.columns if re.search(r'date', c, re.IGNORECASE)), None)
 if not date_col:
-    raise RuntimeError("No 'date' column found (case-insensitive) in data/auto_total.csv")
+    raise RuntimeError("No 'date' column found (case-insensitive) in data/auto_total.parquet")
 
 df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
 df = df.sort_values(date_col).reset_index(drop=True)
