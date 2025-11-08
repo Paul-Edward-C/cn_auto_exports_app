@@ -21,7 +21,7 @@ from bokeh.models import (
     GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div, Label,
     NumeralTickFormatter, DatetimeTickFormatter, DataTable, TableColumn,
     HTMLTemplateFormatter, ColorBar, LinearColorMapper, Spacer, DataRange1d,
-    InlineStyleSheet, Slider, CustomJS, CheckboxButtonGroup
+    InlineStyleSheet, Slider, CustomJS
 )
 from bokeh.plotting import figure
 from bokeh.layouts import column, row
@@ -54,36 +54,33 @@ WORLD_GEOJSON = DATA_DIR / "ne_10m_admin_0_countries.geojson"
 
 # -----------------------------------------------------------------------------
 # Load world geometry (Heroku-safe: prefer GeoJSON; shapefile if available)
-# Memory optimization: Store full world data but only process subset initially
 # -----------------------------------------------------------------------------
-world_full = None  # Full world data (not processed)
-world = None  # Working subset (top-15 or all)
+world = None
 _using_gpd = False
-_world_geojson_data = None  # Cache raw GeoJSON for lazy loading
 
 try:
     if WORLD_GEOJSON.exists():
         with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
-            _world_geojson_data = json.load(f)
-        world_full = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in _world_geojson_data["features"]])
+            gj = json.load(f)
+        world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
         _using_gpd = False
     elif gpd is not None and WORLD_SHP.exists():
-        world_full = gpd.read_file(WORLD_SHP.as_posix())
+        world = gpd.read_file(WORLD_SHP.as_posix())
         _using_gpd = True
     else:
         raise FileNotFoundError("No world shapefile/geojson found in data/")
 except Exception as e:
     if WORLD_GEOJSON.exists():
         with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
-            _world_geojson_data = json.load(f)
-        world_full = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in _world_geojson_data["features"]])
+            gj = json.load(f)
+        world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
         _using_gpd = False
     else:
         raise RuntimeError(f"Failed to load world geometry: {e}")
 
 # Normalize geometry column name so downstream code can always use 'geometry'
-if not _using_gpd and 'geometry' not in world_full.columns and '__geom' in world_full.columns:
-    world_full = world_full.rename(columns={'__geom': 'geometry'})
+if not _using_gpd and 'geometry' not in world.columns and '__geom' in world.columns:
+    world = world.rename(columns={'__geom': 'geometry'})
 
 # Helper to compute bounds when using plain GeoJSON (no GeoPandas)
 def _geom_bounds_list(geom):
@@ -107,52 +104,6 @@ def _total_bounds_df(df_like):
         xmin, ymin, xmax, ymax = _geom_bounds_list(g)
         xmins.append(xmin); ymins.append(ymin); xmaxs.append(xmax); ymaxs.append(ymax)
     return (min(xmins), min(ymins), max(xmaxs), max(ymaxs)) if xmins else (0, 0, 1, 1)
-
-def _geom_to_patches(geom):
-    """Convert a GeoJSON geometry dict or Shapely geometry to xs/ys lists for Bokeh patches."""
-    # Handle Shapely geometry objects (from GeoPandas)
-    if hasattr(geom, '__geo_interface__'):
-        geom = geom.__geo_interface__
-    
-    t = geom.get("type")
-    coords = geom.get("coordinates", [])
-    xs_list, ys_list = [], []
-    
-    if t == "Polygon":
-        for ring in coords:
-            xs = [pt[0] for pt in ring]
-            ys = [pt[1] for pt in ring]
-            xs_list.append(xs)
-            ys_list.append(ys)
-    elif t == "MultiPolygon":
-        for poly in coords:
-            for ring in poly:
-                xs = [pt[0] for pt in ring]
-                ys = [pt[1] for pt in ring]
-                xs_list.append(xs)
-                ys_list.append(ys)
-    
-    return xs_list, ys_list
-
-def world_to_patch_data(df_like):
-    """Convert world dataframe to patch data with xs, ys, color, ADMIN_DISPLAY."""
-    xs_all, ys_all, colors, admins, exports_vals, notes = [], [], [], [], [], []
-    
-    for _, row in df_like.iterrows():
-        geom = row.get("geometry")
-        if geom is None:
-            continue
-        
-        xs_list, ys_list = _geom_to_patches(geom)
-        for xs, ys in zip(xs_list, ys_list):
-            xs_all.append(xs)
-            ys_all.append(ys)
-            colors.append(row.get("custom_color", "#dddddd"))
-            admins.append(row.get("ADMIN_DISPLAY", row.get("ADMIN", "")))
-            exports_vals.append(row.get("exports", np.nan))
-            notes.append(row.get("note", ""))
-    
-    return dict(xs=xs_all, ys=ys_all, color=colors, ADMIN=admins, exports=exports_vals, note=notes)
 
 # -----------------------------------------------------------------------------
 # THEME
@@ -282,7 +233,6 @@ default_type        = pick_default(types_set, 'USD bn')
 
 # -----------------------------------------------------------------------------
 # COUNTRY MATCHING for MAP
-# Memory optimization: Build full list but only load top-15 initially
 # -----------------------------------------------------------------------------
 country_list = sorted([c for c in countries if c != 'World'])
 
@@ -290,24 +240,23 @@ def has_match(admin_name):
     match = difflib.get_close_matches(admin_name, country_list, n=1, cutoff=0.7)
     return bool(match)
 
-# Build the full filtered world data (all matched countries)
-filtered_world_all = world_full[world_full['ADMIN'].apply(has_match)].reset_index(drop=True)
-if 'geometry' not in filtered_world_all.columns and '__geom' in filtered_world_all.columns:
-    filtered_world_all = filtered_world_all.rename(columns={'__geom': 'geometry'})
+filtered_world = world[world['ADMIN'].apply(has_match)].reset_index(drop=True)
+if 'geometry' not in filtered_world.columns and '__geom' in filtered_world.columns:
+    filtered_world = filtered_world.rename(columns={'__geom': 'geometry'})
 
-# Build admin to data country mapping for all countries
-admin_to_df_map_all = {}
-for admin_name in filtered_world_all['ADMIN']:
+admin_to_df_map = {}
+for admin_name in filtered_world['ADMIN']:
     match = difflib.get_close_matches(admin_name, country_list, n=1, cutoff=0.7)
-    admin_to_df_map_all[admin_name] = match[0] if match else None
+    admin_to_df_map[admin_name] = match[0] if match else None
 
 # add China row if missing (for consistent note)
-if not (filtered_world_all["ADMIN"] == "China").any():
-    china_row = world_full[world_full["ADMIN"] == "China"]
+if not (filtered_world["ADMIN"] == "China").any():
+    china_row = world[world["ADMIN"] == "China"]
     if not china_row.empty:
         if 'geometry' not in china_row.columns and '__geom' in china_row.columns:
             china_row = china_row.rename(columns={'__geom': 'geometry'})
-        filtered_world_all = pd.concat([filtered_world_all, china_row], ignore_index=True)
+        filtered_world = pd.concat([filtered_world, china_row], ignore_index=True)
+
 
 terms_dict = {
     "United States of America": "US",
@@ -316,125 +265,72 @@ terms_dict = {
     "Hong Kong S.A.R" : 'Hong Kong'
 }
 
-filtered_world_all["ADMIN_DISPLAY"] = filtered_world_all["ADMIN"].replace(terms_dict)
-
-# Function to determine top N countries by aggregate export value
-def get_top_n_countries(n=15):
-    """Determine top N countries by aggregate export values across all data."""
-    # Aggregate exports for all countries across all time periods
-    country_totals = {}
-    
-    for admin_name, df_country in admin_to_df_map_all.items():
-        if df_country is None or df_country == 'World':
-            continue
-        
-        total = 0
-        # Sum across all combinations for this country
-        for key, col in key_to_col.items():
-            flow, country, product, product_cat, unit = key
-            if country == df_country:
-                if col in df.columns:
-                    vals = pd.to_numeric(df[col], errors='coerce')
-                    total += vals.sum()
-        
-        if total > 0:
-            country_totals[admin_name] = total
-    
-    # Sort and get top N
-    sorted_countries = sorted(country_totals.items(), key=lambda x: x[1], reverse=True)
-    top_admins = [admin for admin, _ in sorted_countries[:n]]
-    
-    # Always include China for the note
-    if "China" not in top_admins and (filtered_world_all["ADMIN"] == "China").any():
-        top_admins.append("China")
-    
-    return top_admins
-
-# Initialize with top 15 countries to save memory
-print("[BOOT] Computing top 15 countries...")
-top_15_admins = get_top_n_countries(15)
-filtered_world = filtered_world_all[filtered_world_all['ADMIN'].isin(top_15_admins)].copy().reset_index(drop=True)
-admin_to_df_map = {admin: admin_to_df_map_all[admin] for admin in filtered_world['ADMIN'] if admin in admin_to_df_map_all}
-
-print(f"[BOOT] Initial load: {len(filtered_world)} countries (top 15 + China)")
+filtered_world["ADMIN_DISPLAY"] = filtered_world["ADMIN"].replace(terms_dict)
 
 
 # -----------------------------------------------------------------------------
 # PERFORMANCE: Precompute admin values cache
-# Memory optimization: Cache only top-15 initially, build full cache on demand
 # -----------------------------------------------------------------------------
 # Build cache structure: {(flow, product, product_cat, type_str): {date_idx: {admin_name: value}}}
 # This eliminates the need to scan DataFrame on each selector change
-print("[BOOT] Building admin_values_cache for top 15...")
+print("[BOOT] Building admin_values_cache...")
 import time
 _cache_start = time.time()
 
-# Track current mode
-_current_mode = "top15"  # "top15" or "all"
 admin_values_cache = {}
-admin_values_cache_all = None  # Lazy-loaded cache for all countries
 
-def _build_cache_for_admin_map(admin_map):
-    """Build admin values cache for given admin_to_df_map."""
-    cache = {}
-    
-    # Get all valid combinations from key_to_col
-    valid_combos = set()
-    for (flow, country, product, product_cat, unit) in key_to_col.keys():
-        valid_combos.add((flow, product, product_cat, unit))
-    
-    # For each valid combo, precompute values for all dates and admin regions using vectorized operations
-    for combo in valid_combos:
-        flow, product, product_cat, type_str = combo
-        cache_key = combo
-        
-        # Build a mapping from admin_name to column name for this combo
-        admin_to_col = {}
-        for admin_name, df_country in admin_map.items():
-            if df_country is not None:
-                key = (flow, df_country, product, product_cat, type_str)
-                col = key_to_col.get(key)
-                if col and col in df.columns:
-                    admin_to_col[admin_name] = col
-        
-        # If no columns found for this combo, skip
-        if not admin_to_col:
-            cache[cache_key] = {}
-            continue
-        
-        # Extract all relevant columns at once (vectorized)
-        relevant_cols = list(admin_to_col.values())
-        if relevant_cols:
-            subset = df[relevant_cols].values  # numpy array for fast access
-            col_to_idx = {col: idx for idx, col in enumerate(relevant_cols)}
-            
-            # Build cache for all dates at once
-            date_caches = {}
-            for date_idx in range(len(df)):
-                date_cache = {}
-                for admin_name, col in admin_to_col.items():
-                    col_idx = col_to_idx[col]
-                    val = subset[date_idx, col_idx]
-                    date_cache[admin_name] = float(val) if pd.notna(val) else np.nan
-                
-                # Add NaN for admin regions without data
-                for admin_name in admin_map.keys():
-                    if admin_name not in date_cache:
-                        date_cache[admin_name] = np.nan
-                
-                date_caches[date_idx] = date_cache
-            
-            cache[cache_key] = date_caches
-        else:
-            cache[cache_key] = {}
-    
-    return cache
+# Get all valid combinations from key_to_col
+valid_combos = set()
+for (flow, country, product, product_cat, unit) in key_to_col.keys():
+    valid_combos.add((flow, product, product_cat, unit))
 
-# Build initial cache for top 15 only
-admin_values_cache = _build_cache_for_admin_map(admin_to_df_map)
+# For each valid combo, precompute values for all dates and admin regions using vectorized operations
+for combo in valid_combos:
+    flow, product, product_cat, type_str = combo
+    cache_key = combo
+    
+    # Build a mapping from admin_name to column name for this combo
+    admin_to_col = {}
+    for admin_name, df_country in admin_to_df_map.items():
+        if df_country is not None:
+            key = (flow, df_country, product, product_cat, type_str)
+            col = key_to_col.get(key)
+            if col and col in df.columns:
+                admin_to_col[admin_name] = col
+    
+    # If no columns found for this combo, skip
+    if not admin_to_col:
+        admin_values_cache[cache_key] = {}
+        continue
+    
+    # Extract all relevant columns at once (vectorized)
+    relevant_cols = list(admin_to_col.values())
+    if relevant_cols:
+        subset = df[relevant_cols].values  # numpy array for fast access
+        col_to_idx = {col: idx for idx, col in enumerate(relevant_cols)}
+        
+        # Build cache for all dates at once
+        date_caches = {}
+        for date_idx in range(len(df)):
+            date_cache = {}
+            for admin_name, col in admin_to_col.items():
+                col_idx = col_to_idx[col]
+                val = subset[date_idx, col_idx]
+                date_cache[admin_name] = float(val) if pd.notna(val) else np.nan
+            
+            # Add NaN for admin regions without data
+            for admin_name in admin_to_df_map.keys():
+                if admin_name not in date_cache:
+                    date_cache[admin_name] = np.nan
+            
+            date_caches[date_idx] = date_cache
+        
+        admin_values_cache[cache_key] = date_caches
+    else:
+        admin_values_cache[cache_key] = {}
 
 _cache_elapsed = time.time() - _cache_start
-print(f"[BOOT] admin_values_cache built: {len(admin_values_cache)} combos, {len(df)} dates, {len(filtered_world)} countries in {_cache_elapsed:.2f}s")
+print(f"[BOOT] admin_values_cache built: {len(admin_values_cache)} combos, {len(df)} dates in {_cache_elapsed:.2f}s")
 
 
 # -----------------------------------------------------------------------------
@@ -454,6 +350,18 @@ def should_log(flow, type_str):
     if flow == 'Balance':
         return False
     return is_currency_type(type_str)
+
+def world_to_geojson(df_like):
+    # add ADMIN_DISPLAY to what we serialize
+    cols = ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
+    df_like = df_like[cols]
+    if _using_gpd:
+        return df_like.to_json()
+    feats = []
+    for _, r in df_like.iterrows():
+        props = {k: r.get(k, None) for k in ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color']}
+        feats.append({"type": "Feature", "properties": props, "geometry": r["geometry"]})
+    return json.dumps({"type": "FeatureCollection", "features": feats})
 
 def get_colors(export_values, palette, vmin, vmax, highlight_admins=None):
     arr = np.asarray(export_values, dtype=float)
@@ -517,9 +425,6 @@ month_slider = Slider(title="", start=0, end=max(len(DATE_LIST)-1, 0),
 play_button  = Button(label="► Play", width=70)
 pause_button = Button(label="❚❚ Pause", width=90, disabled=True)
 
-# Toggle for showing all countries vs top 15
-show_all_toggle = CheckboxButtonGroup(labels=["Show all countries"], active=[], width=200)
-
 app_footnote = Div(
     text="Source: EAE, CCA",
     width=980,
@@ -541,9 +446,8 @@ filtered_world["exports"] = np.nan
 filtered_world["exports_log"] = np.nan
 filtered_world["note"] = ""
 filtered_world["custom_color"] = "#dddddd"
-
-# Use ColumnDataSource with patch data instead of GeoJSONDataSource
-patch_source = ColumnDataSource(data=world_to_patch_data(filtered_world))
+columns_to_keep = ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
+geo_source = GeoJSONDataSource(geojson=world_to_geojson(filtered_world[columns_to_keep]))
 
 top15_table_source  = ColumnDataSource(data=dict(country=[], value=[]))
 top15_chart_source  = ColumnDataSource(data=dict(country=[], value=[]))
@@ -561,7 +465,6 @@ p = figure(
     title=f"China, {default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
     tools=TOOLS, x_axis_location=None, y_axis_location=None,
     active_scroll='wheel_zoom', width=950, height=520,
-    output_backend="webgl"
 )
 p.grid.grid_line_color = None
 
@@ -580,11 +483,11 @@ color_bar = ColorBar(color_mapper=color_mapper_obj, label_standoff=12, location=
 p.add_layout(color_bar, 'right')
 p.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen', text="www.eastasiaecon.com/cn/#charts"))
 
-patches = p.patches('xs', 'ys', source=patch_source, fill_color='color',
+patches = p.patches('xs', 'ys', source=geo_source, fill_color='custom_color',
     fill_alpha=0.7, line_color="gray", line_width=0.5)
 hover = p.select_one(HoverTool)
 hover.point_policy = "follow_mouse"
-hover.tooltips = [("Country", "@ADMIN"), ("Value", "@exports{0,0.00}"), ("Note", "@note")]
+hover.tooltips = [("Country", "@ADMIN_DISPLAY"), ("Value", "@exports{0,0.00}"), ("Note", "@note")]
 
 BACKGROUND_URL = "https://www.eastasiaecon.com/content/images/size/w2400/2023/04/Image-29-4-2023-at-7.34-PM.jpeg"
 bg_map_src = ColumnDataSource(dict(url=[BACKGROUND_URL],
@@ -653,12 +556,18 @@ series_table = DataTable(
     header_row=True
 )
 
+top15_button = Button(label="Highlight Top 15", button_type="success", width=220, height=35)
+reset_button = Button(label="🔄", button_type="default", width=40, height=35)
 download_series_button = Button(label="Download Series CSV", button_type="primary", width=220, height=35)
 download_top15_button  = Button(label="Download Top 15 CSV", button_type="primary", width=220, height=35)
 
 BTN_CSS = """
 :host .bk-btn { font-size: 0.9rem; font-family: Georgia, serif; border: none; border-radius: 5px;
   background: #104b1f; color: white; height: 35px; width: 220px; margin: 0; padding: 0 10px; box-shadow: none; }
+"""
+RESET_CSS = """
+:host .bk-btn { font-size: 0.9rem; font-family: Georgia, serif; border: none; border-radius: 5px;
+  background: #104b1f; color: white; height: 35px; width: 40px; margin: 0; padding: 0 6px; box-shadow: none; }
 """
 SELECTS_CSS = """
 :host .bk-input-group{
@@ -679,38 +588,21 @@ SELECTS_CSS = """
     background: #104b1f;
 }
 """
-TOGGLE_CSS = """
-:host .bk-btn { 
-    font-size: 0.85rem; 
-    font-family: Georgia, serif; 
-    border: 1px solid #104b1f; 
-    border-radius: 5px;
-    background: white; 
-    color: #104b1f; 
-    height: 35px; 
-    margin: 0 0 0 10px; 
-    padding: 0 10px;
-}
-:host .bk-btn.bk-active { 
-    background: #104b1f; 
-    color: white; 
-}
-"""
 btn_sheet     = InlineStyleSheet(css=BTN_CSS)
+reset_sheet   = InlineStyleSheet(css=RESET_CSS)
 selects_sheet = InlineStyleSheet(css=SELECTS_CSS)
-toggle_sheet  = InlineStyleSheet(css=TOGGLE_CSS)
 
-for b in (download_top15_button, download_series_button):
+for b in (top15_button, download_top15_button, download_series_button):
     b.stylesheets = [btn_sheet]
+reset_button.stylesheets = [reset_sheet]
 
 for w in (s_flow, s_product, s_product_cat, s_type,
           x_flow, x_product, x_product_cat, x_type, x_country_sel):
     w.stylesheets = [selects_sheet]
 
-show_all_toggle.stylesheets = [toggle_sheet]
-
-for b in (download_top15_button, download_series_button):
+for b in (top15_button, download_top15_button, download_series_button):
     b.css_classes = ["styled-btn"]
+reset_button.css_classes = ["icon-btn"]
 
 # -----------------------------------------------------------------------------
 # New: Category options dependent on Product (and optionally flow/type)
@@ -775,8 +667,6 @@ def _row_for_index(i: int) -> int:
     return DATE_ROW_IDXS[i]
 
 def update_snapshot_by_index(i: int):
-    global filtered_world, admin_to_df_map, admin_values_cache, _current_mode, admin_values_cache_all
-    
     i = int(np.clip(i, 0, len(DATE_LIST)-1))
     _set_slider_title(i)
 
@@ -784,42 +674,6 @@ def update_snapshot_by_index(i: int):
     row_idx = _row_for_index(i)
     row = df.iloc[row_idx]
     row_date = pd.to_datetime(row[date_col]).strftime("%b %Y")
-    
-    # Determine which mode to use based on toggle
-    show_all = 0 in show_all_toggle.active
-    
-    # Switch data/cache if mode changed
-    if show_all and _current_mode == "top15":
-        print("[SWITCH] Loading all countries...")
-        _switch_start = time.time()
-        
-        # Switch to all countries
-        filtered_world = filtered_world_all.copy()
-        admin_to_df_map = admin_to_df_map_all.copy()
-        
-        # Build cache for all countries if not already built
-        if admin_values_cache_all is None:
-            print("[CACHE] Building cache for all countries...")
-            admin_values_cache_all = _build_cache_for_admin_map(admin_to_df_map_all)
-        
-        admin_values_cache = admin_values_cache_all
-        _current_mode = "all"
-        
-        _switch_elapsed = time.time() - _switch_start
-        print(f"[SWITCH] Loaded {len(filtered_world)} countries in {_switch_elapsed:.2f}s")
-        
-    elif not show_all and _current_mode == "all":
-        print("[SWITCH] Switching back to top 15...")
-        
-        # Switch back to top 15
-        filtered_world = filtered_world_all[filtered_world_all['ADMIN'].isin(top_15_admins)].copy().reset_index(drop=True)
-        admin_to_df_map = {admin: admin_to_df_map_all[admin] for admin in filtered_world['ADMIN'] if admin in admin_to_df_map_all}
-        
-        # Rebuild cache for top 15 (it's fast enough)
-        admin_values_cache = _build_cache_for_admin_map(admin_to_df_map)
-        _current_mode = "top15"
-        
-        print(f"[SWITCH] Switched back to {len(filtered_world)} countries")
 
     # PERFORMANCE: Use precomputed cache instead of DataFrame lookups
     cache_key = (flow, product, product_cat, type_str)
@@ -864,19 +718,16 @@ def update_snapshot_by_index(i: int):
     # Fast vectorized note assignment using numpy where
     filtered_world["note"] = np.where(pd.isnull(filtered_world["exports"]), "No Data", "")
     filtered_world.loc[filtered_world["ADMIN"] == "China", "note"] = "Exporter (no data)"
-    
-    # Color all countries (no subsetting - we already loaded only the ones we want)
     filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
-    
-    # Update patch source with new data (only contains filtered_world countries)
-    patch_source.data = world_to_patch_data(filtered_world)
+
+    geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
 
     p.title.text = f"China, {flow}, {product}, {product_cat}, {type_str}, {row_date}"
     color_mapper_obj.low = vmin
     color_mapper_obj.high = vmax
     color_bar.title = f"{flow}, {product}, {product_cat}, {type_str}"
 
-    # Top-15 table and chart
+    # Top-15
     top15_table_source.data = dict(country=[], value=[])
     top15_chart_source.data = dict(country=[], value=[])
     top15_chart.x_range.factors = []
@@ -890,9 +741,59 @@ def update_snapshot_by_index(i: int):
         top15_chart.x_range.factors = labels.tolist()
         top15_chart.title.text = f"{flow}, {product}, {product_cat}, {type_str}, {row_date}"
 
-def on_toggle_change(attr, old, new):
-    """Handle toggle change between top 15 and all countries."""
-    update_snapshot_by_index(int(month_slider.value))
+def reset_top15():
+    flow, product, product_cat, type_str = cur_snap()
+    filtered_world["exports_log"] = _scale_values_for_map(flow, type_str)
+    exports_log = filtered_world["exports_log"].astype(float).values
+    if np.isfinite(exports_log).any():
+        vmin = float(np.nanmin(exports_log)); vmax = float(np.nanmax(exports_log))
+        if not np.isfinite(vmin): vmin = 0.0
+        if not np.isfinite(vmax): vmax = 1.0
+        if vmax == vmin: vmax = vmin + 1.0
+    else:
+        vmin, vmax = 0.0, 1.0
+    filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
+    geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
+    top15_table_source.data = dict(country=[], value=[])
+    top15_chart_source.data = dict(country=[], value=[])
+    top15_chart.x_range.factors = []
+
+def highlight_top15():
+    flow, product, product_cat, type_str = cur_snap()
+    if is_world_only(flow, product, product_cat, type_str):
+        return
+    filtered_world["exports_log"] = _scale_values_for_map(flow, type_str)
+    exports_log = filtered_world["exports_log"].astype(float).values
+    valid_idx = np.where(np.isfinite(exports_log))[0]
+    if len(valid_idx) == 0:
+        return
+    if len(valid_idx) > 15:
+        top15_idx = valid_idx[np.argpartition(-exports_log[valid_idx], 15)[:15]]
+    else:
+        top15_idx = valid_idx
+
+    colors = np.full(filtered_world.shape[0], "#dddddd", dtype=object)
+    vmin = float(np.nanmin(exports_log[top15_idx])); vmax = float(np.nanmax(exports_log[top15_idx]))
+    if not np.isfinite(vmin): vmin = 0.0
+    if not np.isfinite(vmax): vmax = 1.0
+    if vmax == vmin:
+        idx = np.zeros(len(top15_idx), dtype=int)
+    else:
+        norm = (exports_log[top15_idx] - vmin) / (vmax - vmin)
+        idx = (np.clip(norm, 0, 1) * (len(smooth_palette) - 1)).round().astype(int)
+    for i, ci in enumerate(top15_idx):
+        colors[ci] = smooth_palette[int(idx[i])]
+    filtered_world["custom_color"] = colors
+    geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
+
+    top = (filtered_world.iloc[top15_idx][["ADMIN", "exports"]]
+        .dropna()
+        .sort_values("exports", ascending=False))
+    labels = top["ADMIN"].replace(terms_dict)
+
+    top15_table_source.data  = dict(country=labels.tolist(), value=top["exports"].tolist())
+    top15_chart_source.data  = dict(country=labels.tolist(), value=top["exports"].tolist())
+    top15_chart.x_range.factors = labels.tolist()
 
 # -----------------------------------------------------------------------------
 # Series explorer
@@ -952,8 +853,8 @@ s_product.on_change('value', _on_snapshot_product_change)
 s_flow.on_change('value', lambda a, o, n: _on_snapshot_product_change(a, o, n))
 s_type.on_change('value', lambda a, o, n: _on_snapshot_product_change(a, o, n))
 
-# Wire up the toggle to update the map
-show_all_toggle.on_change('active', on_toggle_change)
+top15_button.on_click(highlight_top15)
+reset_button.on_click(reset_top15)
 
 def on_month_slider(attr, old, new):
     update_snapshot_by_index(int(new))
@@ -1017,9 +918,9 @@ series_heading = Div(
 )
 
 snapshot_controls = row(s_flow, s_product, s_product_cat, s_type, sizing_mode="stretch_width")
-snapshot_date_row = row(month_slider, play_button, pause_button, show_all_toggle, sizing_mode="stretch_width")
+snapshot_date_row = row(month_slider, play_button, pause_button, sizing_mode="stretch_width")
 
-top15_buttons_row = row(download_top15_button, sizing_mode="stretch_width")
+top15_buttons_row = row(top15_button, download_top15_button, reset_button, sizing_mode="stretch_width")
 TOP15_ROWS_VISIBLE = 15
 TOP15_ROW_HEIGHT   = 26
 TOP15_TABLE_HEIGHT = TOP15_ROWS_VISIBLE * TOP15_ROW_HEIGHT + 48  # + header/padding
@@ -1242,7 +1143,7 @@ _hide_loader_now = CustomJS(code="""
     el.style.display = 'none';
   }
 """)
-patch_source.js_on_change('data', _hide_loader_now)
+geo_source.js_on_change('geojson', _hide_loader_now)
 series_source.js_on_change('data', _hide_loader_now)
 
 _fallback_hide = CustomJS(code="""
