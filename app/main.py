@@ -1,5 +1,6 @@
 # app/main.py
 
+# app/main.py
 
 import json
 import re
@@ -27,20 +28,6 @@ from bokeh.plotting import figure
 from bokeh.layouts import column, row
 from bokeh.themes import Theme
 from bokeh.events import DocumentReady
-
-from tornado.web import RequestHandler
-
-def get_tier_from_request():
-    try:
-        handler: RequestHandler = curdoc().session_context.request
-        if handler is not None:
-            tier = handler.get_argument("tier", "public").lower()
-            return tier
-    except Exception:
-        pass
-    return "public"
-
-tier = get_tier_from_request()
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -266,71 +253,6 @@ terms_dict = {
 }
 
 filtered_world["ADMIN_DISPLAY"] = filtered_world["ADMIN"].replace(terms_dict)
-
-
-# -----------------------------------------------------------------------------
-# PERFORMANCE: Precompute admin values cache
-# -----------------------------------------------------------------------------
-# Build cache structure: {(flow, product, product_cat, type_str): {date_idx: {admin_name: value}}}
-# This eliminates the need to scan DataFrame on each selector change
-print("[BOOT] Building admin_values_cache...")
-import time
-_cache_start = time.time()
-
-admin_values_cache = {}
-
-# Get all valid combinations from key_to_col
-valid_combos = set()
-for (flow, country, product, product_cat, unit) in key_to_col.keys():
-    valid_combos.add((flow, product, product_cat, unit))
-
-# For each valid combo, precompute values for all dates and admin regions using vectorized operations
-for combo in valid_combos:
-    flow, product, product_cat, type_str = combo
-    cache_key = combo
-    
-    # Build a mapping from admin_name to column name for this combo
-    admin_to_col = {}
-    for admin_name, df_country in admin_to_df_map.items():
-        if df_country is not None:
-            key = (flow, df_country, product, product_cat, type_str)
-            col = key_to_col.get(key)
-            if col and col in df.columns:
-                admin_to_col[admin_name] = col
-    
-    # If no columns found for this combo, skip
-    if not admin_to_col:
-        admin_values_cache[cache_key] = {}
-        continue
-    
-    # Extract all relevant columns at once (vectorized)
-    relevant_cols = list(admin_to_col.values())
-    if relevant_cols:
-        subset = df[relevant_cols].values  # numpy array for fast access
-        col_to_idx = {col: idx for idx, col in enumerate(relevant_cols)}
-        
-        # Build cache for all dates at once
-        date_caches = {}
-        for date_idx in range(len(df)):
-            date_cache = {}
-            for admin_name, col in admin_to_col.items():
-                col_idx = col_to_idx[col]
-                val = subset[date_idx, col_idx]
-                date_cache[admin_name] = float(val) if pd.notna(val) else np.nan
-            
-            # Add NaN for admin regions without data
-            for admin_name in admin_to_df_map.keys():
-                if admin_name not in date_cache:
-                    date_cache[admin_name] = np.nan
-            
-            date_caches[date_idx] = date_cache
-        
-        admin_values_cache[cache_key] = date_caches
-    else:
-        admin_values_cache[cache_key] = {}
-
-_cache_elapsed = time.time() - _cache_start
-print(f"[BOOT] admin_values_cache built: {len(admin_values_cache)} combos, {len(df)} dates in {_cache_elapsed:.2f}s")
 
 
 # -----------------------------------------------------------------------------
@@ -675,26 +597,19 @@ def update_snapshot_by_index(i: int):
     row = df.iloc[row_idx]
     row_date = pd.to_datetime(row[date_col]).strftime("%b %Y")
 
-    # PERFORMANCE: Use precomputed cache instead of DataFrame lookups
-    cache_key = (flow, product, product_cat, type_str)
-    if cache_key in admin_values_cache and row_idx in admin_values_cache[cache_key]:
-        country_exports = admin_values_cache[cache_key][row_idx]
-    else:
-        # Fallback for combos not in cache (shouldn't happen normally)
-        country_exports = {}
-        for admin_name, df_country in admin_to_df_map.items():
-            key = (flow, df_country, product, product_cat, type_str)
-            col = key_to_col.get(key)
-            if col and col in df.columns:
-                try:
-                    val = float(row[col])
-                except Exception:
-                    val = np.nan
-            else:
+    country_exports = {}
+    for admin_name, df_country in admin_to_df_map.items():
+        key = (flow, df_country, product, product_cat, type_str)
+        col = key_to_col.get(key)
+        if col and col in df.columns:
+            try:
+                val = float(row[col])
+            except Exception:
                 val = np.nan
-            country_exports[admin_name] = val
+        else:
+            val = np.nan
+        country_exports[admin_name] = val
 
-    # Fast vectorized mapping with pandas .map()
     filtered_world["exports"] = filtered_world["ADMIN"].map(country_exports)
 
     world_only_now = filtered_world["exports"].notna().sum() == 0
@@ -715,8 +630,7 @@ def update_snapshot_by_index(i: int):
     else:
         vmin, vmax = 0.0, 1.0
 
-    # Fast vectorized note assignment using numpy where
-    filtered_world["note"] = np.where(pd.isnull(filtered_world["exports"]), "No Data", "")
+    filtered_world["note"] = filtered_world["exports"].apply(lambda x: "No Data" if pd.isnull(x) else "")
     filtered_world.loc[filtered_world["ADMIN"] == "China", "note"] = "Exporter (no data)"
     filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
 
@@ -1025,79 +939,14 @@ series_section = column(
 
 # PAGE ------------------------------------------------------------------------
 layout_total_w = max(snapshot_row_total_w, series_row_total_w)
-
-
-public_notice = Div(
-    text="Public access is limited to Autos data only.<br>Sign up or log in for access to full data and features.",
-    width=980,
-    styles={'color':'#B7410E', 'font-family':'Georgia,serif', 'font-size':'18px', 'margin-top':'14px', 'font-weight':'bold'}
-)
-public_notice.visible = False
-
-
 layout = column(
     app_title,
     snapshot_section,
     series_section,
-    public_notice,
     app_footnote,
     sizing_mode="fixed",
     width=layout_total_w,
 )
-
-tier = get_tier_from_request()
-ALLOWED_MEMBER_SERIES = [
-    ("Exports", "Japan", "Autos", "Total", "USD bn"),
-    ("Exports", "Korea, Rep.", "Autos", "Total", "USD bn"),
-    ("Exports", "Australia", "Autos", "Total", "USD bn"),
-    ("Exports", "Germany", "Autos", "Total", "USD bn"),
-]
-
-def restrict_features_by_tier():
-    # Hide/show and restrict based on tier
-    if tier == "member":
-        x_country_sel.options = [item[1] for item in ALLOWED_MEMBER_SERIES]
-        series_table.visible = False
-        download_series_button.visible = False
-        top15_table.visible = False
-        download_top15_button.visible = False
-        public_notice.visible = False
-    elif tier == "daily":
-        series_table.visible = False
-        download_series_button.visible = False
-        top15_table.visible = False
-        download_top15_button.visible = False
-        public_notice.visible = False
-    else:  # public: only autos data, show notice if restricted
-        # Choose "Autos" only for public
-        if x_product.value != "Autos":
-            x_product.value = "Autos"
-        # Optionally restrict all selectors to autos/exports/total/usd bn for public
-        x_flow.value = "Exports"
-        x_product_cat.value = "Total"
-        x_type.value = "USD bn"
-        # Ensure only allowed countries for public tier, or all if you wish
-        # You can optionally set x_country_sel.options = sorted(['World'] + available_countries_for_combo("Exports", "Autos", "Total", "USD bn"))
-        # UI notice logic
-        series_table.visible = True
-        download_series_button.visible = True
-        top15_table.visible = True
-        download_top15_button.visible = True
-        public_notice.visible = True
-
-restrict_features_by_tier()
-
-# --- Update callbacks to re-evaluate restrictions if needed ---
-def on_tier_sensitive_change(attr, old, new):
-    restrict_features_by_tier()
-    update_series_view()
-    update_snapshot_by_index(int(month_slider.value))
-
-for w in (x_flow, x_product, x_product_cat, x_type, x_country_sel):
-    w.on_change('value', on_tier_sensitive_change)
-for w in (s_flow, s_product, s_product_cat, s_type):
-    w.on_change('value', on_tier_sensitive_change)
-month_slider.on_change('value', on_tier_sensitive_change)
 # -----------------------------------------------------------------------------
 # Background image syncing (Python-side, safe on Heroku)
 # -----------------------------------------------------------------------------
