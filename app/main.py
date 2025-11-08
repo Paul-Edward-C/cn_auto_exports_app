@@ -281,7 +281,13 @@ def world_to_geojson(df_like):
         return df_like.to_json()
     feats = []
     for _, r in df_like.iterrows():
-        props = {k: r.get(k, None) for k in ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color']}
+        props = {}
+        for k in ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color']:
+            val = r.get(k, None)
+            # Convert NaN to None so JSON serialization works
+            if pd.isna(val):
+                val = None
+            props[k] = val
         feats.append({"type": "Feature", "properties": props, "geometry": r["geometry"]})
     return json.dumps({"type": "FeatureCollection", "features": feats})
 
@@ -857,7 +863,7 @@ top15_col = column(
     top15_chart,
     Spacer(height=8),
     top15_table,
-    sizing_mode="fixed",
+    sizing_mode="stretch_width",
     width=370,
 )
 
@@ -868,9 +874,9 @@ GUTTER  = 16    # space between left and right columns
 LEFT_W_MAP = int(p.width)  # keep the map width exactly as defined earlier
 
 # Make selector rows fixed so they don't stretch under the right column
-snapshot_controls.sizing_mode = "fixed"
+snapshot_controls.sizing_mode = "stretch_width"
 snapshot_controls.width       = LEFT_W_MAP
-snapshot_date_row.sizing_mode = "fixed"
+snapshot_date_row.sizing_mode = "stretch_width"
 snapshot_date_row.width       = LEFT_W_MAP
 
 left_col = column(
@@ -878,13 +884,13 @@ left_col = column(
     snapshot_date_row,
     no_map_div,
     p,
-    sizing_mode="fixed",
+    sizing_mode="stretch_width",
     width=LEFT_W_MAP,
 )
 
 # Right column (Top-15) stays fixed width
 top15_col.width       = RIGHT_W
-top15_col.sizing_mode = "fixed"
+top15_col.sizing_mode = "stretch_width"
 top15_col.margin      = (0, 0, 0, 0)
 
 snapshot_row_total_w = LEFT_W_MAP + GUTTER + RIGHT_W
@@ -892,7 +898,7 @@ main_row = row(
     left_col,
     Spacer(width=GUTTER),
     top15_col,
-    sizing_mode="fixed",
+    sizing_mode="stretch_width",
     width=snapshot_row_total_w,
 )
 # Top-align children so Top-15 starts flush with selectors
@@ -901,7 +907,7 @@ main_row.styles = {"align-items": "flex-start"}
 snapshot_section = column(
     snapshot_heading,
     main_row,
-    sizing_mode="fixed",
+    sizing_mode="stretch_width",
     width=snapshot_row_total_w,
 )
 
@@ -910,30 +916,30 @@ snapshot_section = column(
 LEFT_W_SERIES = int(series_chart.width)
 
 series_controls = row(x_flow, x_country_sel, x_product, x_product_cat, x_type)
-series_controls.sizing_mode = "fixed"
+series_controls.sizing_mode = "stretch_width"
 series_controls.width       = LEFT_W_SERIES + GUTTER + RIGHT_W
 
-series_left  = column(series_chart, sizing_mode="fixed", width=LEFT_W_SERIES)
-series_right = column(series_table,  sizing_mode="fixed", width=RIGHT_W)
+series_left  = column(series_chart, sizing_mode="stretch_width", width=LEFT_W_SERIES)
+series_right = column(series_table,  sizing_mode="stretch_width", width=RIGHT_W)
 
 series_row_total_w = LEFT_W_SERIES + GUTTER + RIGHT_W
 series_row = row(
     series_left,
     Spacer(width=GUTTER),
     series_right,
-    sizing_mode="fixed",
+    sizing_mode="stretch_width",
     width=series_row_total_w,
 )
 series_row.styles = {"align-items": "flex-start"}
 
-series_buttons = row(download_series_button, sizing_mode="fixed", width=series_row_total_w)
+series_buttons = row(download_series_button, sizing_mode="stretch_width", width=series_row_total_w)
 
 series_section = column(
     series_heading,
     series_controls,
     series_row,
     series_buttons,
-    sizing_mode="fixed",
+    sizing_mode="stretch_width",
     width=series_row_total_w,
 )
 
@@ -944,7 +950,7 @@ layout = column(
     snapshot_section,
     series_section,
     app_footnote,
-    sizing_mode="fixed",
+    sizing_mode="stretch_width",
     width=layout_total_w,
 )
 # -----------------------------------------------------------------------------
