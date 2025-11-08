@@ -21,7 +21,7 @@ from bokeh.models import (
     GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div, Label,
     NumeralTickFormatter, DatetimeTickFormatter, DataTable, TableColumn,
     HTMLTemplateFormatter, ColorBar, LinearColorMapper, Spacer, DataRange1d,
-    InlineStyleSheet, Slider, CustomJS
+    InlineStyleSheet, Slider, CustomJS, CheckboxButtonGroup
 )
 from bokeh.plotting import figure
 from bokeh.layouts import column, row
@@ -104,6 +104,52 @@ def _total_bounds_df(df_like):
         xmin, ymin, xmax, ymax = _geom_bounds_list(g)
         xmins.append(xmin); ymins.append(ymin); xmaxs.append(xmax); ymaxs.append(ymax)
     return (min(xmins), min(ymins), max(xmaxs), max(ymaxs)) if xmins else (0, 0, 1, 1)
+
+def _geom_to_patches(geom):
+    """Convert a GeoJSON geometry dict or Shapely geometry to xs/ys lists for Bokeh patches."""
+    # Handle Shapely geometry objects (from GeoPandas)
+    if hasattr(geom, '__geo_interface__'):
+        geom = geom.__geo_interface__
+    
+    t = geom.get("type")
+    coords = geom.get("coordinates", [])
+    xs_list, ys_list = [], []
+    
+    if t == "Polygon":
+        for ring in coords:
+            xs = [pt[0] for pt in ring]
+            ys = [pt[1] for pt in ring]
+            xs_list.append(xs)
+            ys_list.append(ys)
+    elif t == "MultiPolygon":
+        for poly in coords:
+            for ring in poly:
+                xs = [pt[0] for pt in ring]
+                ys = [pt[1] for pt in ring]
+                xs_list.append(xs)
+                ys_list.append(ys)
+    
+    return xs_list, ys_list
+
+def world_to_patch_data(df_like):
+    """Convert world dataframe to patch data with xs, ys, color, ADMIN_DISPLAY."""
+    xs_all, ys_all, colors, admins, exports_vals, notes = [], [], [], [], [], []
+    
+    for _, row in df_like.iterrows():
+        geom = row.get("geometry")
+        if geom is None:
+            continue
+        
+        xs_list, ys_list = _geom_to_patches(geom)
+        for xs, ys in zip(xs_list, ys_list):
+            xs_all.append(xs)
+            ys_all.append(ys)
+            colors.append(row.get("custom_color", "#dddddd"))
+            admins.append(row.get("ADMIN_DISPLAY", row.get("ADMIN", "")))
+            exports_vals.append(row.get("exports", np.nan))
+            notes.append(row.get("note", ""))
+    
+    return dict(xs=xs_all, ys=ys_all, color=colors, ADMIN=admins, exports=exports_vals, note=notes)
 
 # -----------------------------------------------------------------------------
 # THEME
@@ -351,18 +397,6 @@ def should_log(flow, type_str):
         return False
     return is_currency_type(type_str)
 
-def world_to_geojson(df_like):
-    # add ADMIN_DISPLAY to what we serialize
-    cols = ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
-    df_like = df_like[cols]
-    if _using_gpd:
-        return df_like.to_json()
-    feats = []
-    for _, r in df_like.iterrows():
-        props = {k: r.get(k, None) for k in ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color']}
-        feats.append({"type": "Feature", "properties": props, "geometry": r["geometry"]})
-    return json.dumps({"type": "FeatureCollection", "features": feats})
-
 def get_colors(export_values, palette, vmin, vmax, highlight_admins=None):
     arr = np.asarray(export_values, dtype=float)
     mask = np.isfinite(arr)
@@ -425,6 +459,9 @@ month_slider = Slider(title="", start=0, end=max(len(DATE_LIST)-1, 0),
 play_button  = Button(label="► Play", width=70)
 pause_button = Button(label="❚❚ Pause", width=90, disabled=True)
 
+# Toggle for showing all countries vs top 15
+show_all_toggle = CheckboxButtonGroup(labels=["Show all countries"], active=[], width=200)
+
 app_footnote = Div(
     text="Source: EAE, CCA",
     width=980,
@@ -446,8 +483,9 @@ filtered_world["exports"] = np.nan
 filtered_world["exports_log"] = np.nan
 filtered_world["note"] = ""
 filtered_world["custom_color"] = "#dddddd"
-columns_to_keep = ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
-geo_source = GeoJSONDataSource(geojson=world_to_geojson(filtered_world[columns_to_keep]))
+
+# Use ColumnDataSource with patch data instead of GeoJSONDataSource
+patch_source = ColumnDataSource(data=world_to_patch_data(filtered_world))
 
 top15_table_source  = ColumnDataSource(data=dict(country=[], value=[]))
 top15_chart_source  = ColumnDataSource(data=dict(country=[], value=[]))
@@ -465,6 +503,7 @@ p = figure(
     title=f"China, {default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
     tools=TOOLS, x_axis_location=None, y_axis_location=None,
     active_scroll='wheel_zoom', width=950, height=520,
+    output_backend="webgl"
 )
 p.grid.grid_line_color = None
 
@@ -483,11 +522,11 @@ color_bar = ColorBar(color_mapper=color_mapper_obj, label_standoff=12, location=
 p.add_layout(color_bar, 'right')
 p.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen', text="www.eastasiaecon.com/cn/#charts"))
 
-patches = p.patches('xs', 'ys', source=geo_source, fill_color='custom_color',
+patches = p.patches('xs', 'ys', source=patch_source, fill_color='color',
     fill_alpha=0.7, line_color="gray", line_width=0.5)
 hover = p.select_one(HoverTool)
 hover.point_policy = "follow_mouse"
-hover.tooltips = [("Country", "@ADMIN_DISPLAY"), ("Value", "@exports{0,0.00}"), ("Note", "@note")]
+hover.tooltips = [("Country", "@ADMIN"), ("Value", "@exports{0,0.00}"), ("Note", "@note")]
 
 BACKGROUND_URL = "https://www.eastasiaecon.com/content/images/size/w2400/2023/04/Image-29-4-2023-at-7.34-PM.jpeg"
 bg_map_src = ColumnDataSource(dict(url=[BACKGROUND_URL],
@@ -556,18 +595,12 @@ series_table = DataTable(
     header_row=True
 )
 
-top15_button = Button(label="Highlight Top 15", button_type="success", width=220, height=35)
-reset_button = Button(label="🔄", button_type="default", width=40, height=35)
 download_series_button = Button(label="Download Series CSV", button_type="primary", width=220, height=35)
 download_top15_button  = Button(label="Download Top 15 CSV", button_type="primary", width=220, height=35)
 
 BTN_CSS = """
 :host .bk-btn { font-size: 0.9rem; font-family: Georgia, serif; border: none; border-radius: 5px;
   background: #104b1f; color: white; height: 35px; width: 220px; margin: 0; padding: 0 10px; box-shadow: none; }
-"""
-RESET_CSS = """
-:host .bk-btn { font-size: 0.9rem; font-family: Georgia, serif; border: none; border-radius: 5px;
-  background: #104b1f; color: white; height: 35px; width: 40px; margin: 0; padding: 0 6px; box-shadow: none; }
 """
 SELECTS_CSS = """
 :host .bk-input-group{
@@ -588,21 +621,38 @@ SELECTS_CSS = """
     background: #104b1f;
 }
 """
+TOGGLE_CSS = """
+:host .bk-btn { 
+    font-size: 0.85rem; 
+    font-family: Georgia, serif; 
+    border: 1px solid #104b1f; 
+    border-radius: 5px;
+    background: white; 
+    color: #104b1f; 
+    height: 35px; 
+    margin: 0 0 0 10px; 
+    padding: 0 10px;
+}
+:host .bk-btn.bk-active { 
+    background: #104b1f; 
+    color: white; 
+}
+"""
 btn_sheet     = InlineStyleSheet(css=BTN_CSS)
-reset_sheet   = InlineStyleSheet(css=RESET_CSS)
 selects_sheet = InlineStyleSheet(css=SELECTS_CSS)
+toggle_sheet  = InlineStyleSheet(css=TOGGLE_CSS)
 
-for b in (top15_button, download_top15_button, download_series_button):
+for b in (download_top15_button, download_series_button):
     b.stylesheets = [btn_sheet]
-reset_button.stylesheets = [reset_sheet]
 
 for w in (s_flow, s_product, s_product_cat, s_type,
           x_flow, x_product, x_product_cat, x_type, x_country_sel):
     w.stylesheets = [selects_sheet]
 
-for b in (top15_button, download_top15_button, download_series_button):
+show_all_toggle.stylesheets = [toggle_sheet]
+
+for b in (download_top15_button, download_series_button):
     b.css_classes = ["styled-btn"]
-reset_button.css_classes = ["icon-btn"]
 
 # -----------------------------------------------------------------------------
 # New: Category options dependent on Product (and optionally flow/type)
@@ -718,16 +768,54 @@ def update_snapshot_by_index(i: int):
     # Fast vectorized note assignment using numpy where
     filtered_world["note"] = np.where(pd.isnull(filtered_world["exports"]), "No Data", "")
     filtered_world.loc[filtered_world["ADMIN"] == "China", "note"] = "Exporter (no data)"
-    filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
+    
+    # Determine which countries to show based on toggle
+    show_all = 0 in show_all_toggle.active
+    
+    if show_all:
+        # Show all countries with data
+        filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
+        df_to_render = filtered_world
+    else:
+        # Default: show only top 15 by export value
+        valid_idx = np.where(np.isfinite(exports_log))[0]
+        if len(valid_idx) > 15:
+            top15_idx = valid_idx[np.argpartition(-exports_log[valid_idx], 15)[:15]]
+        else:
+            top15_idx = valid_idx
+        
+        # Compute color scale based on top 15 only
+        if len(top15_idx) > 0:
+            top15_vmin = float(np.nanmin(exports_log[top15_idx]))
+            top15_vmax = float(np.nanmax(exports_log[top15_idx]))
+            if not np.isfinite(top15_vmin): top15_vmin = 0.0
+            if not np.isfinite(top15_vmax): top15_vmax = 1.0
+            if top15_vmax == top15_vmin: top15_vmax = top15_vmin + 1.0
+        else:
+            top15_vmin, top15_vmax = 0.0, 1.0
+        
+        # Set colors: gray for non-top15, palette for top15
+        colors = np.full(filtered_world.shape[0], "#dddddd", dtype=object)
+        if len(top15_idx) > 0:
+            norm = (exports_log[top15_idx] - top15_vmin) / (top15_vmax - top15_vmin)
+            idx = (np.clip(norm, 0, 1) * (len(smooth_palette) - 1)).round().astype(int)
+            for i, ci in enumerate(top15_idx):
+                colors[ci] = smooth_palette[int(idx[i])]
+        
+        filtered_world["custom_color"] = colors
+        # Use top15 scale for color bar when in default mode
+        vmin, vmax = top15_vmin, top15_vmax
+        df_to_render = filtered_world
 
-    geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
+    # Update patch source with new data
+    patch_source.data = world_to_patch_data(df_to_render)
 
     p.title.text = f"China, {flow}, {product}, {product_cat}, {type_str}, {row_date}"
     color_mapper_obj.low = vmin
     color_mapper_obj.high = vmax
     color_bar.title = f"{flow}, {product}, {product_cat}, {type_str}"
 
-    # Top-15
+    # Top-15 table and chart
     top15_table_source.data = dict(country=[], value=[])
     top15_chart_source.data = dict(country=[], value=[])
     top15_chart.x_range.factors = []
@@ -741,59 +829,9 @@ def update_snapshot_by_index(i: int):
         top15_chart.x_range.factors = labels.tolist()
         top15_chart.title.text = f"{flow}, {product}, {product_cat}, {type_str}, {row_date}"
 
-def reset_top15():
-    flow, product, product_cat, type_str = cur_snap()
-    filtered_world["exports_log"] = _scale_values_for_map(flow, type_str)
-    exports_log = filtered_world["exports_log"].astype(float).values
-    if np.isfinite(exports_log).any():
-        vmin = float(np.nanmin(exports_log)); vmax = float(np.nanmax(exports_log))
-        if not np.isfinite(vmin): vmin = 0.0
-        if not np.isfinite(vmax): vmax = 1.0
-        if vmax == vmin: vmax = vmin + 1.0
-    else:
-        vmin, vmax = 0.0, 1.0
-    filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
-    geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
-    top15_table_source.data = dict(country=[], value=[])
-    top15_chart_source.data = dict(country=[], value=[])
-    top15_chart.x_range.factors = []
-
-def highlight_top15():
-    flow, product, product_cat, type_str = cur_snap()
-    if is_world_only(flow, product, product_cat, type_str):
-        return
-    filtered_world["exports_log"] = _scale_values_for_map(flow, type_str)
-    exports_log = filtered_world["exports_log"].astype(float).values
-    valid_idx = np.where(np.isfinite(exports_log))[0]
-    if len(valid_idx) == 0:
-        return
-    if len(valid_idx) > 15:
-        top15_idx = valid_idx[np.argpartition(-exports_log[valid_idx], 15)[:15]]
-    else:
-        top15_idx = valid_idx
-
-    colors = np.full(filtered_world.shape[0], "#dddddd", dtype=object)
-    vmin = float(np.nanmin(exports_log[top15_idx])); vmax = float(np.nanmax(exports_log[top15_idx]))
-    if not np.isfinite(vmin): vmin = 0.0
-    if not np.isfinite(vmax): vmax = 1.0
-    if vmax == vmin:
-        idx = np.zeros(len(top15_idx), dtype=int)
-    else:
-        norm = (exports_log[top15_idx] - vmin) / (vmax - vmin)
-        idx = (np.clip(norm, 0, 1) * (len(smooth_palette) - 1)).round().astype(int)
-    for i, ci in enumerate(top15_idx):
-        colors[ci] = smooth_palette[int(idx[i])]
-    filtered_world["custom_color"] = colors
-    geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
-
-    top = (filtered_world.iloc[top15_idx][["ADMIN", "exports"]]
-        .dropna()
-        .sort_values("exports", ascending=False))
-    labels = top["ADMIN"].replace(terms_dict)
-
-    top15_table_source.data  = dict(country=labels.tolist(), value=top["exports"].tolist())
-    top15_chart_source.data  = dict(country=labels.tolist(), value=top["exports"].tolist())
-    top15_chart.x_range.factors = labels.tolist()
+def on_toggle_change(attr, old, new):
+    """Handle toggle change between top 15 and all countries."""
+    update_snapshot_by_index(int(month_slider.value))
 
 # -----------------------------------------------------------------------------
 # Series explorer
@@ -853,8 +891,8 @@ s_product.on_change('value', _on_snapshot_product_change)
 s_flow.on_change('value', lambda a, o, n: _on_snapshot_product_change(a, o, n))
 s_type.on_change('value', lambda a, o, n: _on_snapshot_product_change(a, o, n))
 
-top15_button.on_click(highlight_top15)
-reset_button.on_click(reset_top15)
+# Wire up the toggle to update the map
+show_all_toggle.on_change('active', on_toggle_change)
 
 def on_month_slider(attr, old, new):
     update_snapshot_by_index(int(new))
@@ -918,9 +956,9 @@ series_heading = Div(
 )
 
 snapshot_controls = row(s_flow, s_product, s_product_cat, s_type, sizing_mode="stretch_width")
-snapshot_date_row = row(month_slider, play_button, pause_button, sizing_mode="stretch_width")
+snapshot_date_row = row(month_slider, play_button, pause_button, show_all_toggle, sizing_mode="stretch_width")
 
-top15_buttons_row = row(top15_button, download_top15_button, reset_button, sizing_mode="stretch_width")
+top15_buttons_row = row(download_top15_button, sizing_mode="stretch_width")
 TOP15_ROWS_VISIBLE = 15
 TOP15_ROW_HEIGHT   = 26
 TOP15_TABLE_HEIGHT = TOP15_ROWS_VISIBLE * TOP15_ROW_HEIGHT + 48  # + header/padding
@@ -1143,7 +1181,7 @@ _hide_loader_now = CustomJS(code="""
     el.style.display = 'none';
   }
 """)
-geo_source.js_on_change('geojson', _hide_loader_now)
+patch_source.js_on_change('data', _hide_loader_now)
 series_source.js_on_change('data', _hide_loader_now)
 
 _fallback_hide = CustomJS(code="""
