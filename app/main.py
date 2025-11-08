@@ -106,7 +106,11 @@ def _total_bounds_df(df_like):
     return (min(xmins), min(ymins), max(xmaxs), max(ymaxs)) if xmins else (0, 0, 1, 1)
 
 def _geom_to_patches(geom):
-    """Convert a GeoJSON geometry to xs/ys lists for Bokeh patches."""
+    """Convert a GeoJSON geometry dict or Shapely geometry to xs/ys lists for Bokeh patches."""
+    # Handle Shapely geometry objects (from GeoPandas)
+    if hasattr(geom, '__geo_interface__'):
+        geom = geom.__geo_interface__
+    
     t = geom.get("type")
     coords = geom.get("coordinates", [])
     xs_list, ys_list = [], []
