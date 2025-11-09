@@ -1,10 +1,10 @@
-# app/main.py
-
-# app/main.py
+# app/main.py - OPTIMIZED VERSION
+# Uses preprocessed data files for faster loading
 
 import json
 import re
 import difflib
+import pickle
 from pathlib import Path
 from typing import Optional
 import numpy as np
@@ -35,18 +35,27 @@ from bokeh.events import DocumentReady
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 
-DF_PATH = DATA_DIR / "auto_total.parquet"
+# OPTIMIZED: Use preprocessed files
+DF_PATH = DATA_DIR / "auto_total.parquet"  # Original filename
+SCHEMA_CACHE = DATA_DIR / "schema_cache.pkl"
 WORLD_SHP = DATA_DIR / "ne_10m_admin_0_countries.shp"
 WORLD_GEOJSON = DATA_DIR / "ne_10m_admin_0_countries.geojson"
+WORLD_GEOJSON_SIMPLE = DATA_DIR / "world_simple.geojson"  # New: simplified version
 
 # -----------------------------------------------------------------------------
-# Load world geometry (Heroku-safe: prefer GeoJSON; shapefile if available)
+# Load world geometry (Heroku-safe: prefer simplified GeoJSON)
 # -----------------------------------------------------------------------------
 world = None
 _using_gpd = False
 
 try:
-    if WORLD_GEOJSON.exists():
+    # OPTIMIZED: Try simplified GeoJSON first
+    if WORLD_GEOJSON_SIMPLE.exists():
+        with WORLD_GEOJSON_SIMPLE.open('r', encoding='utf-8') as f:
+            gj = json.load(f)
+        world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
+        _using_gpd = False
+    elif WORLD_GEOJSON.exists():
         with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
             gj = json.load(f)
         world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
@@ -140,74 +149,89 @@ formatter = HTMLTemplateFormatter(template="""
 """)
 
 # -----------------------------------------------------------------------------
-# DATA LOAD
+# DATA LOAD - OPTIMIZED!
 # -----------------------------------------------------------------------------
+print("[BOOT] Loading preprocessed data...")
+
+# OPTIMIZED: Load cleaned parquet (already has numeric columns processed)
 df = pd.read_parquet(DF_PATH.as_posix(), engine='pyarrow')
+df = df.reset_index()  # Reset index without dropping
 
-def _normalize_header(s: str) -> str:
-    s = (s or "")
-    s = s.replace("\ufeff", "").replace("\xa0", " ")
-    parts = [p.strip() for p in s.split(",")]
-    return ", ".join(parts)
+# OPTIMIZED: Load cached schema instead of re-parsing
+if SCHEMA_CACHE.exists():
+    print("[BOOT] Loading cached schema...")
+    with open(SCHEMA_CACHE, 'rb') as f:
+        schema_data = pickle.load(f)
+    
+    key_to_col = schema_data['key_to_col']
+    flows = schema_data['flows']
+    countries = schema_data['countries']
+    products = schema_data['products']
+    product_cats = schema_data['product_cats']
+    types_set = schema_data['types_set']
+    date_col = schema_data.get('date_col')
+    
+    # If date_col not in cache, find it
+    if not date_col:
+        date_col = next((c for c in df.columns if re.search(r'date', c, re.IGNORECASE)), None)
+else:
+    # Fallback to original parsing if cache doesn't exist
+    print("[BOOT] No schema cache found, parsing from scratch...")
+    
+    def _normalize_header(s: str) -> str:
+        s = (s or "")
+        s = s.replace("\ufeff", "").replace("\xa0", " ")
+        parts = [p.strip() for p in s.split(",")]
+        return ", ".join(parts)
+    
+    df.columns = [_normalize_header(c) for c in df.columns]
+    
+    def parse_schema(colname: str):
+        parts = [p.strip() for p in colname.split(",")]
+        if len(parts) >= 6 and parts[0].lower() == "china":
+            flow, country, product, product_cat = parts[1], parts[2], parts[3], parts[4]
+            unit = ", ".join(parts[5:]).strip()
+            return (flow, country, product, product_cat, unit)
+        return None
+    
+    key_to_col = {}
+    flows, countries, products, product_cats, types_set = set(), set(), set(), set(), set()
+    
+    for col in df.columns:
+        parsed = parse_schema(col)
+        if parsed is None:
+            continue
+        flow, country, product, product_cat, unit = parsed
+        key_to_col[(flow, country, product, product_cat, unit)] = col
+        flows.add(flow); countries.add(country); products.add(product); product_cats.add(product_cat); types_set.add(unit)
+    
+    date_col = next((c for c in df.columns if re.search(r'date', c, re.IGNORECASE)), None)
 
-df.columns = [_normalize_header(c) for c in df.columns]
-
-# Detect & prepare date column
-date_col = next((c for c in df.columns if re.search(r'date', c, re.IGNORECASE)), None)
 if not date_col:
-    raise RuntimeError("No 'date' column found (case-insensitive) in data/auto_total.parquet")
+    raise RuntimeError("No 'date' column found in data")
 
+# Process dates
 df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
 df = df.sort_values(date_col).reset_index(drop=True)
 
-# unique, sorted normalized ticks
-_norm_all = df[date_col].dropna().dt.normalize()
-_date_uni = _norm_all.drop_duplicates().sort_values()
+# OPTIMIZED: Single-pass date processing
+normalized_dates = df[date_col].dropna().dt.normalize()
+unique_dates = normalized_dates.drop_duplicates().sort_values()
 
-DATE_LIST = [d.to_pydatetime() for d in _date_uni]
-DATE_LABELS = [pd.Timestamp(d).strftime("%b %Y") for d in DATE_LIST]
+DATE_LIST = unique_dates.dt.to_pydatetime().tolist()
+DATE_LABELS = unique_dates.dt.strftime("%b %Y").tolist()
 
-_last_idx = _norm_all.groupby(_norm_all).apply(lambda s: s.index[-1])
-DATE_ROW_IDXS = [int(_last_idx.loc[pd.Timestamp(d)]) for d in _date_uni]
+# OPTIMIZED: Use groupby().tail(1) instead of apply with lambda
+last_indices = normalized_dates.groupby(normalized_dates, group_keys=False).tail(1).index
+DATE_ROW_IDXS = last_indices.tolist()
 
 def latest_date_label(fmt="%b %Y"):
     dates = pd.to_datetime(df[date_col], errors='coerce').dropna()
     return dates.max().strftime(fmt) if not dates.empty else "Latest"
 
 # -----------------------------------------------------------------------------
-# SCHEMA PARSER
-# (Expected wide columns: "China, {Flow}, {Country}, {Product}, {Product_cat}, {Unit}")
+# SCHEMA PARSER (for legacy compatibility - schema is now cached)
 # -----------------------------------------------------------------------------
-key_to_col = {}
-flows, countries, products, product_cats, types_set = set(), set(), set(), set(), set()
-
-def parse_schema(colname: str):
-    parts = [p.strip() for p in colname.split(",")]
-    if len(parts) >= 6 and parts[0].lower() == "china":
-        flow, country, product, product_cat = parts[1], parts[2], parts[3], parts[4]
-        unit = ", ".join(parts[5:]).strip()
-        return (flow, country, product, product_cat, unit)
-    return None
-
-for col in df.columns:
-    parsed = parse_schema(col)
-    if parsed is None:
-        continue
-    flow, country, product, product_cat, unit = parsed
-    key_to_col[(flow, country, product, product_cat, unit)] = col
-    flows.add(flow); countries.add(country); products.add(product); product_cats.add(product_cat); types_set.add(unit)
-
-# numeric coercion (clean thousands/nbsp)
-for _col in set(key_to_col.values()) & set(df.columns):
-    df[_col] = pd.to_numeric(
-        df[_col].astype(str)
-              .str.replace(',', '', regex=False)
-              .str.replace('\u202f', '', regex=False)
-              .str.replace('\xa0', '', regex=False)
-              .str.strip(),
-        errors='coerce'
-    )
-
 def pick_default(options, preferred=None):
     if preferred and preferred in options:
         return preferred
@@ -244,7 +268,6 @@ if not (filtered_world["ADMIN"] == "China").any():
             china_row = china_row.rename(columns={'__geom': 'geometry'})
         filtered_world = pd.concat([filtered_world, china_row], ignore_index=True)
 
-
 terms_dict = {
     "United States of America": "US",
     "United Arab Emirates": "UAE",
@@ -253,7 +276,6 @@ terms_dict = {
 }
 
 filtered_world["ADMIN_DISPLAY"] = filtered_world["ADMIN"].replace(terms_dict)
-
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -327,8 +349,6 @@ def _scale_values_for_map(flow, type_str):
             return vals.apply(lambda x: np.log1p(x) if pd.notnull(x) else np.nan).astype(float)
     return vals.astype(float)
 
-
-
 # -----------------------------------------------------------------------------
 # Widgets
 # -----------------------------------------------------------------------------
@@ -392,7 +412,7 @@ latest_label = latest_date_label()
 p = figure(
     title=f"China, {default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
     tools=TOOLS, x_axis_location=None, y_axis_location=None,
-    active_scroll='wheel_zoom', width=950, height=520,
+    active_scroll='wheel_zoom', width=972, height=589,  # Updated for export dimensions
 )
 p.grid.grid_line_color = None
 
@@ -418,15 +438,20 @@ hover.point_policy = "follow_mouse"
 hover.tooltips = [("Country", "@ADMIN_DISPLAY"), ("Value", "@exports{0,0.00}"), ("Note", "@note")]
 
 BACKGROUND_URL = "https://www.eastasiaecon.com/content/images/size/w2400/2023/04/Image-29-4-2023-at-7.34-PM.jpeg"
-bg_map_src = ColumnDataSource(dict(url=[BACKGROUND_URL],
-                                   x=[p.x_range.start], y=[p.y_range.start],
-                                   w=[p.x_range.end - p.x_range.start], h=[p.y_range.end - p.y_range.start]))
-p.image_url(url='url', x='x', y='y', w='w', h='h', source=bg_map_src,
-            anchor="bottom_left", global_alpha=0.18, level="underlay")
+p.image_url(
+    url=[BACKGROUND_URL],
+    x=p.x_range.start,
+    y=p.y_range.start,
+    w=(p.x_range.end - p.x_range.start),
+    h=(p.y_range.end - p.y_range.start),
+    anchor="bottom_left",
+    global_alpha=0.18,
+    level="image"
+)
 
-# --- Top 15 bar
+# --- Top 10 bar
 top15_chart = figure(
-    x_range=[], height=350, width=370,
+    x_range=[], height=300, width=370,  # Reduced height for top 10
     title=f"{default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
     toolbar_location=None, tools="", min_border_left=10, min_border_right=10, min_border_top=10, min_border_bottom=10
 )
@@ -440,7 +465,7 @@ series_xr = DataRange1d(only_visible=True, range_padding=0.02)
 series_yr = DataRange1d(only_visible=True, range_padding=0.08)
 
 series_chart = figure(
-    height=260, width=980, title="Series",
+    height=589, width=972, title="Series",  # Updated for export dimensions
     x_axis_type="datetime",
     x_range=series_xr, y_range=series_yr,
     tools="pan,xwheel_zoom,box_zoom,reset,save",
@@ -464,7 +489,7 @@ series_chart.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen', te
 
 bg_series_src = ColumnDataSource(dict(url=[BACKGROUND_URL], x=[0], y=[0], w=[1], h=[1]))
 series_chart.image_url(url='url', x='x', y='y', w='w', h='h', source=bg_series_src,
-                       anchor="bottom_left", global_alpha=0.12, level="underlay")
+                       anchor="bottom_left", global_alpha=0.12, level="image")
 
 # -----------------------------------------------------------------------------
 # Tables & Buttons
@@ -484,7 +509,21 @@ series_table = DataTable(
     header_row=True
 )
 
-top15_button = Button(label="Highlight Top 15", button_type="success", width=220, height=35)
+# Add title for series table
+series_table_title = Div(
+    text=f"<b>China, {default_flow}, World, {default_product}, {default_product_cat}, {default_type}</b>",
+    width=date_width + val_width,
+    styles={
+        "font-family": "Georgia, serif",
+        "font-size": "14px",
+        "font-weight": "bold",
+        "color": "#104b1f",
+        "margin-bottom": "5px",
+        "text-align": "center"
+    }
+)
+
+top15_button = Button(label="Highlight Top 10", button_type="success", width=220, height=35)
 reset_button = Button(label="🔄", button_type="default", width=40, height=35)
 download_series_button = Button(label="Download Series CSV", button_type="primary", width=220, height=35)
 download_top15_button  = Button(label="Download Top 15 CSV", button_type="primary", width=220, height=35)
@@ -647,13 +686,13 @@ def update_snapshot_by_index(i: int):
     color_mapper_obj.high = vmax
     color_bar.title = f"{flow}, {product}, {product_cat}, {type_str}"
 
-    # Top-15
+    # Top-10
     top15_table_source.data = dict(country=[], value=[])
     top15_chart_source.data = dict(country=[], value=[])
     top15_chart.x_range.factors = []
     if not world_only_now:
         top = (filtered_world[['ADMIN','exports']].dropna()
-            .sort_values('exports', ascending=False).head(15))
+            .sort_values('exports', ascending=False).head(10))  # Changed to 10
         labels = top['ADMIN'].replace(terms_dict)
 
         top15_table_source.data  = dict(country=labels.tolist(), value=top['exports'].tolist())
@@ -687,8 +726,8 @@ def highlight_top15():
     valid_idx = np.where(np.isfinite(exports_log))[0]
     if len(valid_idx) == 0:
         return
-    if len(valid_idx) > 15:
-        top15_idx = valid_idx[np.argpartition(-exports_log[valid_idx], 15)[:15]]
+    if len(valid_idx) > 10:  # Changed to 10
+        top15_idx = valid_idx[np.argpartition(-exports_log[valid_idx], 10)[:10]]  # Changed to 10
     else:
         top15_idx = valid_idx
 
@@ -742,7 +781,10 @@ def update_series_view():
     flow, country, product, product_cat, type_str = cur_series()
     data = _get_series_timeseries(flow, country, product, product_cat, type_str)
     series_source.data = data
-    series_chart.title.text = f"China, {flow}, {country}, {product}, {product_cat}, {type_str}"
+    series_title = f"China, {flow}, {country}, {product}, {product_cat}, {type_str}"
+    series_chart.title.text = series_title
+    # Update series table title to match chart title
+    series_table_title.text = f"<b>{series_title}</b>"
     if len(data["date"]) > 0:
         dates_ser = pd.to_datetime(pd.Series(data["date"]), errors="coerce")
         vals_ser  = pd.to_numeric(pd.Series(data["value"]), errors="coerce")
@@ -798,80 +840,96 @@ def _advance_slider():
     j = (i + 1) % len(DATE_LIST)
     month_slider.value = j
 def _play():
-    if _pc_handle["id"] is None:
-        _pc_handle["id"] = curdoc().add_periodic_callback(_advance_slider, ANIM_INTERVAL_MS)
-        play_button.disabled = True
-        pause_button.disabled = False
+    play_button.disabled = True
+    pause_button.disabled = False
+    _pc_handle["id"] = curdoc().add_periodic_callback(_advance_slider, ANIM_INTERVAL_MS)
 def _pause():
+    play_button.disabled = False
+    pause_button.disabled = True
     if _pc_handle["id"] is not None:
         curdoc().remove_periodic_callback(_pc_handle["id"])
         _pc_handle["id"] = None
-        play_button.disabled = False
-        pause_button.disabled = True
+
 play_button.on_click(_play)
 pause_button.on_click(_pause)
 
 # -----------------------------------------------------------------------------
-# Titles & Layout
+# Top-15 table
 # -----------------------------------------------------------------------------
-app_title = Div(
-    text="Mapping China's foreign trade",
-    styles={"font-family":"Georgia, serif","font-size":"32px","font-weight":"bold","color":"#104b1f","margin-bottom":"20px"}
+top15_table_columns = [
+    TableColumn(field="country", title="Country", width=150),
+    TableColumn(field="value",   title="Value",   formatter=formatter, width=220)
+]
+top15_table = DataTable(
+    source=top15_table_source,
+    columns=top15_table_columns,
+    width=370,
+    height=360,  # Reduced to show 10 rows instead of 15
+    index_position=None,
+    header_row=True
 )
 
+# -----------------------------------------------------------------------------
+# Layout
+# -----------------------------------------------------------------------------
 snapshot_heading = Div(
-    text="<b>Global snapshot</b> — values by country at selected date",
+    text="<b>Snapshot</b><br><i style='font-size:0.8em; color:gray;'>Select: Flow, Product, Category, Unit, Month</i>",
     width=980,
     styles={
-        "font-family": "Georgia, serif", "font-size": "20px", "font-weight": "bold", "color": "black",
-        "border-bottom": "2px solid #104b1f", "padding-bottom": "4px",
+        "font-family": "Georgia, serif",
+        "font-size": "28px",
+        "color": "black",
+        "margin-top": "15px",
+        "margin-bottom": "10px",
+        "border-bottom": "2px solid #104b1f",
+        "padding-bottom": "6px"
     },
 )
 
 series_heading = Div(
-    text="<b>Time series</b>",
+    text="<b>Series</b><br><i style='font-size:0.8em; color:gray;'>Select: Flow, Country, Product, Category, Unit</i>",
     width=980,
     styles={
-        "font-family": "Georgia, serif", "font-size": "20px", "font-weight": "bold", "color": "black",
-        "border-bottom": "2px solid #104b1f", "padding-bottom": "4px",
+        "font-family": "Georgia, serif",
+        "font-size": "28px",
+        "color": "black",
+        "margin-top": "30px",
+        "margin-bottom": "10px",
+        "border-bottom": "2px solid #104b1f",
+        "padding-bottom": "6px"
     },
 )
 
-snapshot_controls = row(s_flow, s_product, s_product_cat, s_type, sizing_mode="stretch_width")
-snapshot_date_row = row(month_slider, play_button, pause_button, sizing_mode="stretch_width")
-
-top15_buttons_row = row(top15_button, download_top15_button, reset_button, sizing_mode="stretch_width")
-TOP15_ROWS_VISIBLE = 15
-TOP15_ROW_HEIGHT   = 26
-TOP15_TABLE_HEIGHT = TOP15_ROWS_VISIBLE * TOP15_ROW_HEIGHT + 48  # + header/padding
-
-top15_table = DataTable(
-    source=top15_table_source,
-    columns=[
-        TableColumn(field="country", title="Country", width=200),
-        TableColumn(field="value",   title="Value",   formatter=formatter, width=150),
-    ],
-    width=370,
-    row_height=TOP15_ROW_HEIGHT,
-    height=TOP15_TABLE_HEIGHT,
-    index_position=None,
-    header_row=True,
+app_title = Div(
+    text="<h1 style='margin:0; color:#104b1f;'>China — Trade: Snapshot & Series</h1>",
+    width=980,
+    styles={
+        "font-family": "Georgia, serif",
+        "text-align": "center",
+        "padding": "20px 0 10px 0",
+        "border-bottom": "3px solid #104b1f"
+    },
 )
 
+# SNAPSHOT (TOP) ----------------------------------------------------------
+LEFT_W_MAP = 972  # Updated to match new map width
+RIGHT_W    = 370
+GUTTER     = 30
+
+snapshot_controls = row(s_flow, s_product, s_product_cat, s_type)
 top15_col = column(
-    top15_buttons_row,
+    row(top15_button, Spacer(width=20), reset_button),
     top15_chart,
-    Spacer(height=8),
     top15_table,
-    sizing_mode="stretch_width",
-    width=370,
+    download_top15_button,
 )
 
-RIGHT_W = 370   # Top-15 / series table column width
-GUTTER  = 16    # space between left and right columns
-
-# SNAPSHOT (TOP) --------------------------------------------------------------
-LEFT_W_MAP = int(p.width)  # keep the map width exactly as defined earlier
+snapshot_date_row = row(
+    column(
+        month_slider,
+        row(play_button, pause_button),
+    )
+)
 
 # Make selector rows fixed so they don't stretch under the right column
 snapshot_controls.sizing_mode = "stretch_width"
@@ -920,7 +978,7 @@ series_controls.sizing_mode = "stretch_width"
 series_controls.width       = LEFT_W_SERIES + GUTTER + RIGHT_W
 
 series_left  = column(series_chart, sizing_mode="stretch_width", width=LEFT_W_SERIES)
-series_right = column(series_table,  sizing_mode="stretch_width", width=RIGHT_W)
+series_right = column(series_table_title, series_table, sizing_mode="stretch_width", width=RIGHT_W)
 
 series_row_total_w = LEFT_W_SERIES + GUTTER + RIGHT_W
 series_row = row(
@@ -957,11 +1015,7 @@ layout = column(
 # Background image syncing (Python-side, safe on Heroku)
 # -----------------------------------------------------------------------------
 def _prime_backgrounds():
-    if None not in (p.x_range.start, p.x_range.end, p.y_range.start, p.y_range.end):
-        bg_map_src.data.update(
-            x=[p.x_range.start], y=[p.y_range.start],
-            w=[p.x_range.end - p.x_range.start], h=[p.y_range.end - p.y_range.start],
-        )
+    # Map background is static (added directly to figure), only sync series
     if None not in (series_chart.x_range.start, series_chart.x_range.end,
                     series_chart.y_range.start, series_chart.y_range.end):
         bg_series_src.data.update(
@@ -969,12 +1023,6 @@ def _prime_backgrounds():
             w=[series_chart.x_range.end - series_chart.x_range.start],
             h=[series_chart.y_range.end - series_chart.y_range.start],
         )
-
-def _sync_map_bg(attr, old, new):
-    bg_map_src.data.update(
-        x=[p.x_range.start], y=[p.y_range.start],
-        w=[p.x_range.end - p.x_range.start], h=[p.y_range.end - p.y_range.start],
-    )
 
 def _sync_series_bg(attr, old, new):
     bg_series_src.data.update(
@@ -1013,15 +1061,12 @@ _fallback_hide = CustomJS(code="""
 """)
 p.js_on_event('document_ready', _fallback_hide)
 
-# --- Sync backgrounds on pan/zoom (unchanged) ---
-p.x_range.on_change('start', _sync_map_bg)
-p.x_range.on_change('end',   _sync_map_bg)
-p.y_range.on_change('start', _sync_map_bg)
-p.y_range.on_change('end',   _sync_map_bg)
+# --- Sync backgrounds on pan/zoom ---
+# Map background is static, only sync series chart background
 series_chart.x_range.on_change('start', _sync_series_bg)
 series_chart.x_range.on_change('end',   _sync_series_bg)
 series_chart.y_range.on_change('start', _sync_series_bg)
-series_chart.y_range.on_change('end',   _sync_series_bg)
+series_chart.x_range.on_change('end',   _sync_series_bg)
 
 # --- Initial data fill (unchanged) ---
 # ensure category options respect initial product selections
@@ -1035,6 +1080,9 @@ else:
 
 _update_series_country_options()
 update_series_view()
+
+# Prime backgrounds after data is loaded
+curdoc().add_next_tick_callback(_prime_backgrounds)
 
 # -----------------------------------------------------------------------------
 # CSV downloads (client-side JS)
@@ -1074,6 +1122,7 @@ download_top15_button.js_on_click(CustomJS(
 # -----------------------------------------------------------------------------
 # Boot logs
 # -----------------------------------------------------------------------------
+print("[BOOT] Optimized version loaded!")
 print("[BOOT] CSV path:", DF_PATH.as_posix())
 print("[BOOT] CSV shape:", df.shape)
 print("[BOOT] date_col:", date_col, "dates:", df[date_col].dropna().shape[0])
