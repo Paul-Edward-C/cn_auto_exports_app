@@ -487,9 +487,7 @@ series_chart.yaxis.formatter = NumeralTickFormatter(format="0,0.00")
 series_chart.xaxis.formatter = DatetimeTickFormatter(years="%b-%y", months="%b-%y")
 series_chart.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen', text="www.eastasiaecon.com/cn/#charts"))
 
-bg_series_src = ColumnDataSource(dict(url=[BACKGROUND_URL], x=[0], y=[0], w=[1], h=[1]))
-series_chart.image_url(url='url', x='x', y='y', w='w', h='h', source=bg_series_src,
-                       anchor="bottom_left", global_alpha=0.12, level="image")
+# Note: Background image for series chart will be added after data loads and ranges are set
 
 # -----------------------------------------------------------------------------
 # Tables & Buttons
@@ -1015,20 +1013,26 @@ layout = column(
 # Background image syncing (Python-side, safe on Heroku)
 # -----------------------------------------------------------------------------
 def _prime_backgrounds():
-    # Map background is static (added directly to figure), only sync series
+    # Add series chart background after ranges are calculated
     if None not in (series_chart.x_range.start, series_chart.x_range.end,
                     series_chart.y_range.start, series_chart.y_range.end):
-        bg_series_src.data.update(
-            x=[series_chart.x_range.start], y=[series_chart.y_range.start],
-            w=[series_chart.x_range.end - series_chart.x_range.start],
-            h=[series_chart.y_range.end - series_chart.y_range.start],
-        )
+        # Check if background image hasn't been added yet
+        if not hasattr(_prime_backgrounds, '_series_bg_added'):
+            series_chart.image_url(
+                url=[BACKGROUND_URL],
+                x=series_chart.x_range.start,
+                y=series_chart.y_range.start,
+                w=(series_chart.x_range.end - series_chart.x_range.start),
+                h=(series_chart.y_range.end - series_chart.y_range.start),
+                anchor="bottom_left",
+                global_alpha=0.12,
+                level="image"
+            )
+            _prime_backgrounds._series_bg_added = True
 
 def _sync_series_bg(attr, old, new):
-    bg_series_src.data.update(
-        x=[series_chart.x_range.start], y=[series_chart.y_range.start],
-        w=[series_chart.x_range.end - series_chart.x_range.start], h=[series_chart.y_range.end - series_chart.y_range.start],
-    )
+    # Since background is now static like the map, we don't need to sync it
+    pass
 
 # -----------------------------------------------------------------------------
 # Mount + initial fill
@@ -1062,11 +1066,7 @@ _fallback_hide = CustomJS(code="""
 p.js_on_event('document_ready', _fallback_hide)
 
 # --- Sync backgrounds on pan/zoom ---
-# Map background is static, only sync series chart background
-series_chart.x_range.on_change('start', _sync_series_bg)
-series_chart.x_range.on_change('end',   _sync_series_bg)
-series_chart.y_range.on_change('start', _sync_series_bg)
-series_chart.x_range.on_change('end',   _sync_series_bg)
+# Both backgrounds are now static (added directly to figures)
 
 # --- Initial data fill (unchanged) ---
 # ensure category options respect initial product selections
