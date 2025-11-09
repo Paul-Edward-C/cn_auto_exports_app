@@ -388,6 +388,20 @@ app_footnote = Div(
 )
 
 # -----------------------------------------------------------------------------
+# Series data helper (needed early for initial range calculation)
+# -----------------------------------------------------------------------------
+def _get_series_col(flow, country, product, product_cat, type_str):
+    return key_to_col.get((flow, country, product, product_cat, type_str))
+
+def _get_series_timeseries(flow, country, product, product_cat, type_str):
+    col = _get_series_col(flow, country, product, product_cat, type_str)
+    if not col:
+        return dict(date=[], value=[])
+    dates = df[date_col].tolist()
+    vals = df[col].apply(lambda x: round(x, 2) if pd.notnull(x) else None).tolist()
+    return dict(date=dates, value=vals)
+
+# -----------------------------------------------------------------------------
 # Data sources
 # -----------------------------------------------------------------------------
 filtered_world["exports"] = np.nan
@@ -460,24 +474,48 @@ top15_chart.xaxis.major_label_orientation = 1.0
 top15_chart.xgrid.grid_line_color = None
 top15_chart.title.text_font_size = "14px"
 
-# --- Series line chart (DataRange1d)
-series_xr = DataRange1d(only_visible=True, range_padding=0.02)
-series_yr = DataRange1d(only_visible=True, range_padding=0.08)
+# --- Series line chart - Calculate range from data first ---
+# Get initial data to calculate range
+initial_series_data = _get_series_timeseries(default_flow, "World", default_product, default_product_cat, default_type)
+
+if len(initial_series_data['date']) > 0:
+    dates_for_range = pd.to_datetime(initial_series_data['date'])
+    values_for_range = pd.Series(initial_series_data['value'])
+    values_for_range = pd.to_numeric(values_for_range, errors='coerce')
+    
+    x_min = dates_for_range.min()
+    x_max = dates_for_range.max()
+    y_vals = values_for_range.dropna()
+    if len(y_vals) > 0:
+        y_min = y_vals.min()
+        y_max = y_vals.max()
+        y_padding = (y_max - y_min) * 0.08 if y_max > y_min else 1.0
+        y_min = y_min - y_padding
+        y_max = y_max + y_padding
+    else:
+        y_min, y_max = 0, 1
+    
+    x_padding = (x_max - x_min).total_seconds() * 0.02 / 86400  # 2% padding in days
+    x_min = x_min - pd.Timedelta(days=x_padding)
+    x_max = x_max + pd.Timedelta(days=x_padding)
+else:
+    # Fallback if no data
+    x_min = pd.Timestamp('2020-01-01')
+    x_max = pd.Timestamp('2024-12-31')
+    y_min, y_max = 0, 100
 
 series_chart = figure(
     height=589, width=972, title="Series",  # Updated for export dimensions
     x_axis_type="datetime",
-    x_range=series_xr, y_range=series_yr,
+    x_range=(x_min, x_max), y_range=(y_min, y_max),  # Use fixed ranges
     tools="pan,xwheel_zoom,box_zoom,reset,save",
     margin=(20, 10, 10, 10)
 )
-line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=2)
-pts_ts  = series_chart.circle(x="date", y="value", source=series_source, size=5, alpha=0.15)
-series_xr.renderers = [line_ts, pts_ts]
-series_yr.renderers = [line_ts, pts_ts]
+line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=3, color='#556B2F')
+# Remove circles - only show line
 
 hover_ts = HoverTool(
-    renderers=[pts_ts],
+    renderers=[line_ts],
     tooltips=[("Date", "@date{%b %Y}"), ("Value", "@value{0,0.00}")],
     formatters={"@date": "datetime"},
     mode="vline"
@@ -487,7 +525,17 @@ series_chart.yaxis.formatter = NumeralTickFormatter(format="0,0.00")
 series_chart.xaxis.formatter = DatetimeTickFormatter(years="%b-%y", months="%b-%y")
 series_chart.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen', text="www.eastasiaecon.com/cn/#charts"))
 
-# Note: Background image for series chart will be added after data loads and ranges are set
+# Add background image directly with range values, like in working code
+series_chart.image_url(
+    url=[BACKGROUND_URL],
+    x=series_chart.x_range.start,
+    y=series_chart.y_range.start,
+    w=(series_chart.x_range.end - series_chart.x_range.start),
+    h=(series_chart.y_range.end - series_chart.y_range.start),
+    anchor="bottom_left",
+    global_alpha=0.12,
+    level="image"
+)
 
 # -----------------------------------------------------------------------------
 # Tables & Buttons
@@ -520,6 +568,9 @@ series_table_title = Div(
         "text-align": "center"
     }
 )
+
+# Add spacing div before download button
+series_spacer = Div(text="", width=date_width + val_width, height=10)
 
 top15_button = Button(label="Highlight Top 10", button_type="success", width=220, height=35)
 reset_button = Button(label="🔄", button_type="default", width=40, height=35)
@@ -787,6 +838,8 @@ def update_series_view():
         dates_ser = pd.to_datetime(pd.Series(data["date"]), errors="coerce")
         vals_ser  = pd.to_numeric(pd.Series(data["value"]), errors="coerce")
         last      = pd.DataFrame({"date": dates_ser, "value": vals_ser}).tail(24)
+        # Reverse order so latest date is first
+        last = last.iloc[::-1].reset_index(drop=True)
         series_table_source.data = dict(
             index=list(range(len(last))),
             date=last["date"].dt.strftime('%Y-%m-%d').tolist(),
@@ -867,6 +920,9 @@ top15_table = DataTable(
     header_row=True
 )
 
+# Add spacing div before download button
+top15_spacer = Div(text="", width=370, height=10)
+
 # -----------------------------------------------------------------------------
 # Layout
 # -----------------------------------------------------------------------------
@@ -919,6 +975,7 @@ top15_col = column(
     row(top15_button, Spacer(width=20), reset_button),
     top15_chart,
     top15_table,
+    top15_spacer,
     download_top15_button,
 )
 
@@ -976,7 +1033,7 @@ series_controls.sizing_mode = "stretch_width"
 series_controls.width       = LEFT_W_SERIES + GUTTER + RIGHT_W
 
 series_left  = column(series_chart, sizing_mode="stretch_width", width=LEFT_W_SERIES)
-series_right = column(series_table_title, series_table, sizing_mode="stretch_width", width=RIGHT_W)
+series_right = column(series_table_title, series_table, series_spacer, download_series_button, sizing_mode="stretch_width", width=RIGHT_W)
 
 series_row_total_w = LEFT_W_SERIES + GUTTER + RIGHT_W
 series_row = row(
@@ -988,13 +1045,10 @@ series_row = row(
 )
 series_row.styles = {"align-items": "flex-start"}
 
-series_buttons = row(download_series_button, sizing_mode="stretch_width", width=series_row_total_w)
-
 series_section = column(
     series_heading,
     series_controls,
     series_row,
-    series_buttons,
     sizing_mode="stretch_width",
     width=series_row_total_w,
 )
@@ -1013,25 +1067,7 @@ layout = column(
 # Background image syncing (Python-side, safe on Heroku)
 # -----------------------------------------------------------------------------
 def _prime_backgrounds():
-    # Add series chart background after ranges are calculated
-    if None not in (series_chart.x_range.start, series_chart.x_range.end,
-                    series_chart.y_range.start, series_chart.y_range.end):
-        # Check if background image hasn't been added yet
-        if not hasattr(_prime_backgrounds, '_series_bg_added'):
-            series_chart.image_url(
-                url=[BACKGROUND_URL],
-                x=series_chart.x_range.start,
-                y=series_chart.y_range.start,
-                w=(series_chart.x_range.end - series_chart.x_range.start),
-                h=(series_chart.y_range.end - series_chart.y_range.start),
-                anchor="bottom_left",
-                global_alpha=0.12,
-                level="image"
-            )
-            _prime_backgrounds._series_bg_added = True
-
-def _sync_series_bg(attr, old, new):
-    # Since background is now static like the map, we don't need to sync it
+    # Both backgrounds are now static (added directly to figures)
     pass
 
 # -----------------------------------------------------------------------------
@@ -1066,7 +1102,7 @@ _fallback_hide = CustomJS(code="""
 p.js_on_event('document_ready', _fallback_hide)
 
 # --- Sync backgrounds on pan/zoom ---
-# Both backgrounds are now static (added directly to figures)
+# Both backgrounds are now static (added directly to figures with fixed ranges)
 
 # --- Initial data fill (unchanged) ---
 # ensure category options respect initial product selections
