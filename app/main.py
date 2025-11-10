@@ -34,10 +34,11 @@ from bokeh.events import DocumentReady
 # --- MEMBERSHIP AUTHENTICATION ---
 try:
     from ghost_auth import MembershipManager, get_member_tier_from_cookie
-    MEMBERSHIP_ENABLED = True
+    MEMBERSHIP_ENABLED = False
+
 except ImportError:
     print("[AUTH] ghost_auth.py not found - running without membership restrictions")
-#    MEMBERSHIP_ENABLED = False
+    MEMBERSHIP_ENABLED = False
     # Fallback membership manager that grants full access
     class MembershipManager:
         def __init__(self, tier='Daily+Data'):
