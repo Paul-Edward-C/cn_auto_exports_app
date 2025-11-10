@@ -37,7 +37,7 @@ try:
     MEMBERSHIP_ENABLED = True
 except ImportError:
     print("[AUTH] ghost_auth.py not found - running without membership restrictions")
-    MEMBERSHIP_ENABLED = False
+#    MEMBERSHIP_ENABLED = False
     # Fallback membership manager that grants full access
     class MembershipManager:
         def __init__(self, tier='Daily+Data'):
