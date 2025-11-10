@@ -1,1 +1,1 @@
-web: bokeh serve app --port=$PORT --address=0.0.0.0 --use-xheaders --allow-websocket-origin=cn-auto-exports-304fc1cbcf39.herokuapp.com --allow-websocket-origin=data.eastasiaecon.com --allow-websocket-origin=eastasiaecon.com
+web: bokeh serve app --port=$PORT --address=0.0.0.0 --use-xheaders --allow-websocket-origin=cn-auto-exports-304fc1cbcf39.herokuapp.com --allow-websocket-origin=data.eastasiaecon.com --allow-websocket-origin=eastasiaecon.com --allow-websocket-origin=bokeh-proxy.paulcavey.workers.dev
