@@ -1,4 +1,4 @@
-# app/main.py - OPTIMIZED VERSION WITH MEMBERSHIP TIERS
+# app/main.py - OPTIMIZED VERSION - FULL ACCESS FOR ALL USERS
 # Uses preprocessed data files for faster loading
 # Integrates Ghost member authentication for tiered access
 
@@ -31,42 +31,25 @@ from bokeh.layouts import column, row
 from bokeh.themes import Theme
 from bokeh.events import DocumentReady
 
-# --- MEMBERSHIP AUTHENTICATION ---
-try:
-    from ghost_auth import MembershipManager, get_member_tier_from_cookie
-    MEMBERSHIP_ENABLED = False
+# --- MEMBERSHIP REMOVED - EVERYONE HAS FULL ACCESS ---
+class MembershipManager:
+    def __init__(self, tier='Daily+Data'):
+        self.tier = tier
+    def can_download(self): return True
+    def can_animate(self): return True
+    def can_change_selections(self): return True
+    def can_interact(self): return True
+    def get_max_countries(self): return None
+    def has_limited_products(self): return False
+    def get_upgrade_message(self): return ""
+    def get_tier_display_name(self): return "Full Access"
 
-except ImportError:
-    print("[AUTH] ghost_auth.py not found - running without membership restrictions")
-    MEMBERSHIP_ENABLED = False
-    # Fallback membership manager that grants full access
-    class MembershipManager:
-        def __init__(self, tier='Daily+Data'):
-            self.tier = tier
-        def can_download(self): return True
-        def can_animate(self): return True
-        def can_change_selections(self): return True
-        def can_interact(self): return True
-        def get_max_countries(self): return None
-        def has_limited_products(self): return False
-        def get_upgrade_message(self): return ""
-        def get_tier_display_name(self): return "Full Access (Dev Mode)"
+member_manager = MembershipManager('Daily+Data')
+print(f"[AUTH] Full access enabled for all users")
 
-# Get user tier from Ghost session
-if MEMBERSHIP_ENABLED:
-    try:
-        tier = get_member_tier_from_cookie(curdoc().session_context.request)
-    except Exception as e:
-        print(f"[AUTH] Error getting tier from request: {e}")
-        tier = 'public'
-else:
-    tier = 'Daily+Data'  # Full access in dev mode
-
-member_manager = MembershipManager(tier)
-print(f"[AUTH] User access level: {member_manager.get_tier_display_name()}")
-
-# Ghost configuration for upgrade links
+# Ghost configuration (kept for compatibility)
 GHOST_URL = os.getenv('GHOST_URL', 'https://eastasiaecon.com')
+
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -281,13 +264,6 @@ default_product     = pick_default(products, 'Autos')
 default_product_cat = pick_default(product_cats, 'Total')
 default_type        = pick_default(types_set, 'USD bn')
 
-# --- MEMBERSHIP: Limit products for members tier ---
-if member_manager.has_limited_products():
-    # Define limited product set for basic members
-    allowed_products = {'Autos', 'Parts', 'EVs', 'Total'}
-    products = products & allowed_products
-    print(f"[AUTH] Products limited to: {products}")
-
 # -----------------------------------------------------------------------------
 # COUNTRY MATCHING for MAP
 # -----------------------------------------------------------------------------
@@ -419,16 +395,6 @@ month_slider = Slider(title="", start=0, end=max(len(DATE_LIST)-1, 0),
 play_button  = Button(label="► Play", width=70)
 pause_button = Button(label="❚❚ Pause", width=90, disabled=True)
 
-# --- MEMBERSHIP: Disable controls based on tier ---
-if not member_manager.can_change_selections():
-    for widget in (s_flow, s_product, s_product_cat, s_type, 
-                   x_flow, x_product, x_product_cat, x_type, x_country_sel):
-        widget.disabled = True
-
-if not member_manager.can_animate():
-    play_button.disabled = True
-    play_button.label = "🔒 Upgrade"
-
 app_footnote = Div(
     text="Source: EAE, CCA",
     width=980,
@@ -521,9 +487,9 @@ p.image_url(
 
 # --- Top 10 bar
 top15_chart = figure(
-    x_range=[], height=300, width=370,  # Reduced height for top 10
+    x_range=[], height=300, width=495,  # Reduced height for top 10
     title=f"{default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
-    toolbar_location=None, tools="", min_border_left=10, min_border_right=10, min_border_top=10, min_border_bottom=10
+    toolbar_location='right', tools="pan,wheel_zoom,box_zoom,reset,hover,save", min_border_left=10, min_border_right=10, min_border_top=10, min_border_bottom=10
 )
 top15_chart.vbar(x="country", top="value", source=top15_chart_source, width=0.7, color="#556B2F", alpha=0.7)
 top15_chart.xaxis.major_label_orientation = 1.0
@@ -632,13 +598,6 @@ top15_button = Button(label="Highlight Top 10", button_type="success", width=220
 reset_button = Button(label="🔄", button_type="default", width=40, height=35)
 download_series_button = Button(label="Download Series CSV", button_type="primary", width=220, height=35)
 download_top15_button  = Button(label="Download Top 15 CSV", button_type="primary", width=220, height=35)
-
-# --- MEMBERSHIP: Disable downloads for lower tiers ---
-if not member_manager.can_download():
-    download_series_button.disabled = True
-    download_series_button.label = "🔒 Upgrade to Download"
-    download_top15_button.disabled = True
-    download_top15_button.label = "🔒 Upgrade to Download"
 
 BTN_CSS = """
 :host .bk-btn { font-size: 0.9rem; font-family: Georgia, serif; border: none; border-radius: 5px;
@@ -903,14 +862,6 @@ def _update_series_country_options():
     _update_series_category_options()
     cs = sorted(list(set(available_countries_for_combo(flow, product, product_cat, type_str)) | {"World"}))
     
-    # --- MEMBERSHIP: Limit countries based on tier ---
-    max_countries = member_manager.get_max_countries()
-    if max_countries is not None and len(cs) > max_countries + 1:  # +1 for "World"
-        # Keep World first, then top N countries
-        world_list = ["World"] if "World" in cs else []
-        other_countries = [c for c in cs if c != "World"]
-        cs = world_list + other_countries[:max_countries]
-    
     x_country_sel.options = cs
     if x_country_sel.value not in cs:
         x_country_sel.value = "World"
@@ -941,8 +892,6 @@ def update_series_view():
 # Callbacks
 # -----------------------------------------------------------------------------
 def _refresh_snapshot_for_current_index(attr, old, new):
-    if not member_manager.can_interact():
-        return  # Ignore if user can't interact
     update_snapshot_by_index(int(month_slider.value))
 
 for w in (s_flow, s_product, s_product_cat, s_type):
@@ -950,8 +899,6 @@ for w in (s_flow, s_product, s_product_cat, s_type):
 
 # When product (or flow/type) changes on the snapshot side, update category choices first
 def _on_snapshot_product_change(attr, old, new):
-    if not member_manager.can_interact():
-        return  # Ignore if user can't interact
     _update_snapshot_category_options()
     _refresh_snapshot_for_current_index(attr, old, new)
 
@@ -963,14 +910,10 @@ top15_button.on_click(highlight_top15)
 reset_button.on_click(reset_top15)
 
 def on_month_slider(attr, old, new):
-    if not member_manager.can_interact():
-        return  # Ignore if user can't interact
     update_snapshot_by_index(int(new))
 month_slider.on_change('value', on_month_slider)
 
 def on_series_selector_change(attr, old, new):
-    if not member_manager.can_interact():
-        return  # Ignore if user can't interact
     # ensure category options are updated when product/flow/type changes
     _update_series_country_options()
     update_series_view()
@@ -984,15 +927,11 @@ _pc_handle = {"id": None}
 def _advance_slider():
     if len(DATE_LIST) == 0:
         return
-    if not member_manager.can_animate():
-        return  # Don't animate if tier doesn't allow
     i = int(month_slider.value)
     j = (i + 1) % len(DATE_LIST)
     month_slider.value = j
 
 def _play():
-    if not member_manager.can_animate():
-        return  # Ignore if tier doesn't allow animation
     play_button.disabled = True
     pause_button.disabled = False
     _pc_handle["id"] = curdoc().add_periodic_callback(_advance_slider, ANIM_INTERVAL_MS)
@@ -1067,42 +1006,6 @@ app_title = Div(
         "border-bottom": "3px solid #104b1f"
     },
 )
-
-# --- MEMBERSHIP BADGE ---
-membership_badge = Div(
-    text=f"<div style='text-align: center; padding: 8px; background: linear-gradient(135deg, #f0f9f0 0%, #e8f5e8 100%); "
-         f"border-radius: 8px; border: 1px solid #104b1f;'>"
-         f"<span style='font-size: 12px; color: #666;'>Access Level:</span> "
-         f"<strong style='color: #104b1f; font-size: 14px;'>{member_manager.get_tier_display_name()}</strong>"
-         f"</div>",
-    width=980,
-    styles={
-        "font-family": "Georgia, serif",
-        "margin": "15px 0 10px 0"
-    }
-)
-
-# --- UPGRADE PROMPT (if not premium tier) ---
-upgrade_prompt = Spacer(height=0)  # Default empty
-if member_manager.tier in ['public', 'members', 'Daily']:
-    upgrade_message = member_manager.get_upgrade_message()
-    if member_manager.tier == 'public':
-        cta_text = "Sign Up Free"
-        cta_link = f"{GHOST_URL}/#/portal/signup"
-    else:
-        cta_text = "Upgrade Now"
-        cta_link = f"{GHOST_URL}/#/portal/account"
-    
-    upgrade_prompt = Div(
-        text=f"<div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #fff9e6 0%, #fff3cd 100%); "
-             f"border: 2px solid #ffc107; border-radius: 8px; margin: 10px 0;'>"
-             f"<div style='font-size: 16px; color: #856404; margin-bottom: 8px;'>⭐ <strong>{upgrade_message}</strong></div>"
-             f"<a href='{cta_link}' target='_blank' style='display: inline-block; padding: 10px 25px; "
-             f"background: #104b1f; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; "
-             f"font-size: 14px; transition: all 0.3s;'>{cta_text} →</a>"
-             f"</div>",
-        width=980
-    )
 
 # SNAPSHOT (TOP) ----------------------------------------------------------
 LEFT_W_MAP = 972  # Updated to match new map width
@@ -1196,8 +1099,6 @@ series_section = column(
 layout_total_w = max(snapshot_row_total_w, series_row_total_w)
 layout = column(
     app_title,
-    membership_badge,      # NEW: Show user's access level
-    upgrade_prompt,        # NEW: Upgrade CTA for lower tiers
     snapshot_section,
     series_section,
     app_footnote,
@@ -1300,8 +1201,7 @@ download_top15_button.js_on_click(CustomJS(
 # Boot logs
 # -----------------------------------------------------------------------------
 print("[BOOT] Optimized version loaded!")
-print("[BOOT] Membership system:", "ENABLED" if MEMBERSHIP_ENABLED else "DISABLED (Dev Mode)")
-print("[BOOT] User tier:", member_manager.get_tier_display_name())
+print("[BOOT] Full access enabled for all users")
 print("[BOOT] CSV path:", DF_PATH.as_posix())
 print("[BOOT] CSV shape:", df.shape)
 print("[BOOT] date_col:", date_col, "dates:", df[date_col].dropna().shape[0])
@@ -1310,3 +1210,4 @@ print("[BOOT] schema counts -> flows:", len(flows), "countries:", len(countries)
 _default_combo = (default_flow, default_product, default_product_cat, default_type)
 _avail = [c for c in countries if (default_flow, c, default_product, default_product_cat, default_type) in key_to_col]
 print("[BOOT] Default combo:", _default_combo, "country cols:", len(_avail))
+
