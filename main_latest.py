@@ -1,22 +1,15 @@
-# app/main.py - OPTIMIZED VERSION
+# app/main.py
+
+# app/main.py
 
 import json
 import re
 import difflib
-import os
-import warnings
 from pathlib import Path
 from typing import Optional
-from functools import lru_cache
 import numpy as np
 import pandas as pd
 import matplotlib.colors as mcolors
-
-# Heroku detection and optimizations
-IS_HEROKU = os.environ.get('DYNO') is not None
-if IS_HEROKU:
-    warnings.filterwarnings('ignore', category=DeprecationWarning)
-    print("[HEROKU] Running in Heroku environment - optimizations enabled")
 
 # --- OPTIONAL GeoPandas (fallback to GeoJSON if missing) ---
 try:
@@ -46,52 +39,35 @@ DF_PATH = DATA_DIR / "auto_total.parquet"
 WORLD_SHP = DATA_DIR / "ne_10m_admin_0_countries.shp"
 WORLD_GEOJSON = DATA_DIR / "ne_10m_admin_0_countries.geojson"
 
-print(f"[BOOT] Starting initialization...")
-print(f"[BOOT] Base directory: {BASE_DIR}")
-print(f"[BOOT] Data directory: {DATA_DIR}")
-
 # -----------------------------------------------------------------------------
-# CACHED DATA LOADERS (Critical for Heroku performance)
+# Load world geometry (Heroku-safe: prefer GeoJSON; shapefile if available)
 # -----------------------------------------------------------------------------
+world = None
+_using_gpd = False
 
-@lru_cache(maxsize=1)
-def load_world_geometry():
-    """Load and cache world geometry once per worker"""
-    print("[CACHE] Loading world geometry...")
-    world = None
-    _using_gpd = False
-    
-    try:
-        if WORLD_GEOJSON.exists():
-            print(f"[CACHE] Loading GeoJSON from {WORLD_GEOJSON}")
-            with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
-                gj = json.load(f)
-            world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
-            _using_gpd = False
-        elif gpd is not None and WORLD_SHP.exists():
-            print(f"[CACHE] Loading shapefile from {WORLD_SHP}")
-            world = gpd.read_file(WORLD_SHP.as_posix())
-            _using_gpd = True
-        else:
-            raise FileNotFoundError("No world shapefile/geojson found in data/")
-    except Exception as e:
-        if WORLD_GEOJSON.exists():
-            with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
-                gj = json.load(f)
-            world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
-            _using_gpd = False
-        else:
-            raise RuntimeError(f"Failed to load world geometry: {e}")
-    
-    # Normalize geometry column name
-    if not _using_gpd and 'geometry' not in world.columns and '__geom' in world.columns:
-        world = world.rename(columns={'__geom': 'geometry'})
-    
-    print(f"[CACHE] World geometry loaded: {len(world)} features, using_gpd={_using_gpd}")
-    return world, _using_gpd
+try:
+    if WORLD_GEOJSON.exists():
+        with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
+            gj = json.load(f)
+        world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
+        _using_gpd = False
+    elif gpd is not None and WORLD_SHP.exists():
+        world = gpd.read_file(WORLD_SHP.as_posix())
+        _using_gpd = True
+    else:
+        raise FileNotFoundError("No world shapefile/geojson found in data/")
+except Exception as e:
+    if WORLD_GEOJSON.exists():
+        with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
+            gj = json.load(f)
+        world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
+        _using_gpd = False
+    else:
+        raise RuntimeError(f"Failed to load world geometry: {e}")
 
-# Load world geometry once
-world, _using_gpd = load_world_geometry()
+# Normalize geometry column name so downstream code can always use 'geometry'
+if not _using_gpd and 'geometry' not in world.columns and '__geom' in world.columns:
+    world = world.rename(columns={'__geom': 'geometry'})
 
 # Helper to compute bounds when using plain GeoJSON (no GeoPandas)
 def _geom_bounds_list(geom):
@@ -146,14 +122,11 @@ color_map = {
 custom_palette = [color_map['c7'], color_map['c3'], color_map['c8'],
                   color_map['c6'], color_map['c4'], color_map['c2'], color_map['c10']]
 
-@lru_cache(maxsize=10)
-def interpolate_palette(palette_tuple, n):
-    """Cached palette interpolation"""
-    palette = list(palette_tuple)
+def interpolate_palette(palette, n):
     cmap = mcolors.LinearSegmentedColormap.from_list('custom', palette)
     return [mcolors.to_hex(cmap(i/(n-1))) for i in range(n)]
 
-smooth_palette = interpolate_palette(tuple(custom_palette), 50)
+smooth_palette = interpolate_palette(custom_palette, 50)
 
 # Shared HTML formatter (Top-15 & Series tables)
 formatter = HTMLTemplateFormatter(template="""
@@ -167,8 +140,10 @@ formatter = HTMLTemplateFormatter(template="""
 """)
 
 # -----------------------------------------------------------------------------
-# CACHED DATA LOAD
+# DATA LOAD
 # -----------------------------------------------------------------------------
+df = pd.read_parquet(DF_PATH.as_posix(), engine='pyarrow')
+df = df.reset_index()
 
 def _normalize_header(s: str) -> str:
     s = (s or "")
@@ -176,34 +151,12 @@ def _normalize_header(s: str) -> str:
     parts = [p.strip() for p in s.split(",")]
     return ", ".join(parts)
 
-@lru_cache(maxsize=1)
-def load_main_data():
-    """Load and cache the main dataframe once per worker"""
-    print("[CACHE] Loading parquet data...")
-    start_time = pd.Timestamp.now()
-    
-    if not DF_PATH.exists():
-        raise FileNotFoundError(f"Data file not found: {DF_PATH}")
-    
-    df = pd.read_parquet(DF_PATH.as_posix(), engine='pyarrow')
-    df = df.reset_index()
-    
-    # Normalize headers
-    df.columns = [_normalize_header(c) for c in df.columns]
-    
-    elapsed = (pd.Timestamp.now() - start_time).total_seconds()
-    print(f"[CACHE] Parquet loaded in {elapsed:.2f}s: {df.shape[0]} rows × {df.shape[1]} cols")
-    return df
-
-# Load data once
-df = load_main_data()
+df.columns = [_normalize_header(c) for c in df.columns]
 
 # Detect & prepare date column
 date_col = next((c for c in df.columns if re.search(r'date', c, re.IGNORECASE)), None)
 if not date_col:
     raise RuntimeError("No 'date' column found (case-insensitive) in data/auto_total.parquet")
-
-print(f"[BOOT] Date column detected: '{date_col}'")
 
 df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
 df = df.sort_values(date_col).reset_index(drop=True)
@@ -223,50 +176,30 @@ def latest_date_label(fmt="%b %Y"):
     return dates.max().strftime(fmt) if not dates.empty else "Latest"
 
 # -----------------------------------------------------------------------------
-# CACHED SCHEMA PARSER
+# SCHEMA PARSER
+# (Expected wide columns: "China, {Flow}, {Country}, {Product}, {Product_cat}, {Unit}")
 # -----------------------------------------------------------------------------
+key_to_col = {}
+flows, countries, products, product_cats, types_set = set(), set(), set(), set(), set()
 
-@lru_cache(maxsize=1)
-def parse_and_cache_schema():
-    """Parse schema once and cache results"""
-    print("[CACHE] Parsing schema...")
-    start_time = pd.Timestamp.now()
-    
-    key_to_col = {}
-    flows, countries, products, product_cats, types_set = set(), set(), set(), set(), set()
-    
-    def parse_schema(colname: str):
-        parts = [p.strip() for p in colname.split(",")]
-        if len(parts) >= 6 and parts[0].lower() == "china":
-            flow, country, product, product_cat = parts[1], parts[2], parts[3], parts[4]
-            unit = ", ".join(parts[5:]).strip()
-            return (flow, country, product, product_cat, unit)
-        return None
-    
-    for col in df.columns:
-        parsed = parse_schema(col)
-        if parsed is None:
-            continue
-        flow, country, product, product_cat, unit = parsed
-        key_to_col[(flow, country, product, product_cat, unit)] = col
-        flows.add(flow)
-        countries.add(country)
-        products.add(product)
-        product_cats.add(product_cat)
-        types_set.add(unit)
-    
-    elapsed = (pd.Timestamp.now() - start_time).total_seconds()
-    print(f"[CACHE] Schema parsed in {elapsed:.2f}s: {len(key_to_col)} columns indexed")
-    
-    return key_to_col, flows, countries, products, product_cats, types_set
+def parse_schema(colname: str):
+    parts = [p.strip() for p in colname.split(",")]
+    if len(parts) >= 6 and parts[0].lower() == "china":
+        flow, country, product, product_cat = parts[1], parts[2], parts[3], parts[4]
+        unit = ", ".join(parts[5:]).strip()
+        return (flow, country, product, product_cat, unit)
+    return None
 
-# Parse schema once
-key_to_col, flows, countries, products, product_cats, types_set = parse_and_cache_schema()
+for col in df.columns:
+    parsed = parse_schema(col)
+    if parsed is None:
+        continue
+    flow, country, product, product_cat, unit = parsed
+    key_to_col[(flow, country, product, product_cat, unit)] = col
+    flows.add(flow); countries.add(country); products.add(product); product_cats.add(product_cat); types_set.add(unit)
 
-# Numeric coercion (clean thousands/nbsp) - do this once at startup
-print("[BOOT] Converting numeric columns...")
-numeric_cols = list(set(key_to_col.values()) & set(df.columns))
-for _col in numeric_cols:
+# numeric coercion (clean thousands/nbsp)
+for _col in set(key_to_col.values()) & set(df.columns):
     df[_col] = pd.to_numeric(
         df[_col].astype(str)
               .str.replace(',', '', regex=False)
@@ -275,7 +208,6 @@ for _col in numeric_cols:
               .str.strip(),
         errors='coerce'
     )
-print(f"[BOOT] Converted {len(numeric_cols)} numeric columns")
 
 def pick_default(options, preferred=None):
     if preferred and preferred in options:
@@ -288,51 +220,41 @@ default_product_cat = pick_default(product_cats, 'Total')
 default_type        = pick_default(types_set, 'USD bn')
 
 # -----------------------------------------------------------------------------
-# COUNTRY MATCHING for MAP (cached)
+# COUNTRY MATCHING for MAP
 # -----------------------------------------------------------------------------
+country_list = sorted([c for c in countries if c != 'World'])
 
-@lru_cache(maxsize=1)
-def build_filtered_world():
-    """Build and cache the filtered world dataframe with country matching"""
-    print("[CACHE] Building filtered world with country matching...")
-    
-    country_list = sorted([c for c in countries if c != 'World'])
-    
-    def has_match(admin_name):
-        match = difflib.get_close_matches(admin_name, country_list, n=1, cutoff=0.7)
-        return bool(match)
-    
-    filtered = world[world['ADMIN'].apply(has_match)].copy().reset_index(drop=True)
-    if 'geometry' not in filtered.columns and '__geom' in filtered.columns:
-        filtered = filtered.rename(columns={'__geom': 'geometry'})
-    
-    admin_to_df_map = {}
-    for admin_name in filtered['ADMIN']:
-        match = difflib.get_close_matches(admin_name, country_list, n=1, cutoff=0.7)
-        admin_to_df_map[admin_name] = match[0] if match else None
-    
-    # Add China row if missing (for consistent note)
-    if not (filtered["ADMIN"] == "China").any():
-        china_row = world[world["ADMIN"] == "China"]
-        if not china_row.empty:
-            china_row = china_row.copy()
-            if 'geometry' not in china_row.columns and '__geom' in china_row.columns:
-                china_row = china_row.rename(columns={'__geom': 'geometry'})
-            filtered = pd.concat([filtered, china_row], ignore_index=True)
-    
-    terms_dict = {
-        "United States of America": "US",
-        "United Arab Emirates": "UAE",
-        "United Kingdom": "UK",
-        "Hong Kong S.A.R": 'Hong Kong'
-    }
-    
-    filtered["ADMIN_DISPLAY"] = filtered["ADMIN"].replace(terms_dict)
-    
-    print(f"[CACHE] Filtered world built: {len(filtered)} countries matched")
-    return filtered, admin_to_df_map
+def has_match(admin_name):
+    match = difflib.get_close_matches(admin_name, country_list, n=1, cutoff=0.7)
+    return bool(match)
 
-filtered_world, admin_to_df_map = build_filtered_world()
+filtered_world = world[world['ADMIN'].apply(has_match)].reset_index(drop=True)
+if 'geometry' not in filtered_world.columns and '__geom' in filtered_world.columns:
+    filtered_world = filtered_world.rename(columns={'__geom': 'geometry'})
+
+admin_to_df_map = {}
+for admin_name in filtered_world['ADMIN']:
+    match = difflib.get_close_matches(admin_name, country_list, n=1, cutoff=0.7)
+    admin_to_df_map[admin_name] = match[0] if match else None
+
+# add China row if missing (for consistent note)
+if not (filtered_world["ADMIN"] == "China").any():
+    china_row = world[world["ADMIN"] == "China"]
+    if not china_row.empty:
+        if 'geometry' not in china_row.columns and '__geom' in china_row.columns:
+            china_row = china_row.rename(columns={'__geom': 'geometry'})
+        filtered_world = pd.concat([filtered_world, china_row], ignore_index=True)
+
+
+terms_dict = {
+    "United States of America": "US",
+    "United Arab Emirates": "UAE",
+    "United Kingdom": "UK",
+    "Hong Kong S.A.R" : 'Hong Kong'
+}
+
+filtered_world["ADMIN_DISPLAY"] = filtered_world["ADMIN"].replace(terms_dict)
+
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -405,6 +327,8 @@ def _scale_values_for_map(flow, type_str):
         if np.isfinite(minv) and minv >= 0:
             return vals.apply(lambda x: np.log1p(x) if pd.notnull(x) else np.nan).astype(float)
     return vals.astype(float)
+
+
 
 # -----------------------------------------------------------------------------
 # Widgets
@@ -501,7 +425,7 @@ bg_map_src = ColumnDataSource(dict(url=[BACKGROUND_URL],
 p.image_url(url='url', x='x', y='y', w='w', h='h', source=bg_map_src,
             anchor="bottom_left", global_alpha=0.18, level="underlay")
 
-# --- Top 15 bar (use scatter instead of deprecated circle)
+# --- Top 15 bar
 top15_chart = figure(
     x_range=[], height=350, width=370,
     title=f"{default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
@@ -524,8 +448,7 @@ series_chart = figure(
     margin=(20, 10, 10, 10)
 )
 line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=2)
-# Use scatter instead of deprecated circle()
-pts_ts = series_chart.scatter(x="date", y="value", source=series_source, size=5, alpha=0.15)
+pts_ts  = series_chart.circle(x="date", y="value", source=series_source, size=5, alpha=0.15)
 series_xr.renderers = [line_ts, pts_ts]
 series_yr.renderers = [line_ts, pts_ts]
 
@@ -611,22 +534,27 @@ for b in (top15_button, download_top15_button, download_series_button):
 reset_button.css_classes = ["icon-btn"]
 
 # -----------------------------------------------------------------------------
-# Category options dependent on Product
+# New: Category options dependent on Product (and optionally flow/type)
 # -----------------------------------------------------------------------------
 def available_categories_for_combo(flow, product, type_str=None):
-    """Return sorted list of product categories available for the given flow/product."""
+    """Return sorted list of product categories available for the given flow/product.
+       Try first to filter by unit (type_str) when provided; if that yields nothing,
+       fall back to ignoring the unit so we still limit by flow+product."""
+    # First pass: filter including type if provided
     cats = set()
     for (f, c, p, pc, t) in key_to_col.keys():
         if f == flow and p == product:
             if type_str is None or t == type_str:
                 cats.add(pc)
 
+    # If nothing found and type_str was provided, try again without unit filter
     if not cats and type_str is not None:
         for (f, c, p, pc, t) in key_to_col.keys():
             if f == flow and p == product:
                 cats.add(pc)
 
     if not cats:
+        # ultimate fallback to global product_cats (same as before)
         return sorted(list(product_cats))
     return sorted(list(cats))
 
@@ -634,7 +562,9 @@ def _update_snapshot_category_options():
     flow, product, product_cat, type_str = cur_snap()
     cats = available_categories_for_combo(flow, product, type_str)
     s_product_cat.options = cats
+    # keep current selection if it's still valid
     if s_product_cat.value not in cats:
+        # try to preserve a sensible default (previous default or first of cats)
         if default_product_cat in cats:
             s_product_cat.value = default_product_cat
         else:
@@ -725,12 +655,6 @@ def update_snapshot_by_index(i: int):
     if not world_only_now:
         top = (filtered_world[['ADMIN','exports']].dropna()
             .sort_values('exports', ascending=False).head(15))
-        terms_dict = {
-            "United States of America": "US",
-            "United Arab Emirates": "UAE",
-            "United Kingdom": "UK",
-            "Hong Kong S.A.R": 'Hong Kong'
-        }
         labels = top['ADMIN'].replace(terms_dict)
 
         top15_table_source.data  = dict(country=labels.tolist(), value=top['exports'].tolist())
@@ -783,12 +707,6 @@ def highlight_top15():
     filtered_world["custom_color"] = colors
     geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
 
-    terms_dict = {
-        "United States of America": "US",
-        "United Arab Emirates": "UAE",
-        "United Kingdom": "UK",
-        "Hong Kong S.A.R": 'Hong Kong'
-    }
     top = (filtered_world.iloc[top15_idx][["ADMIN", "exports"]]
         .dropna()
         .sort_values("exports", ascending=False))
@@ -814,6 +732,7 @@ def _get_series_timeseries(flow, country, product, product_cat, type_str):
 
 def _update_series_country_options():
     flow, _, product, product_cat, type_str = cur_series()
+    # update category options for series side (dependent on product)
     _update_series_category_options()
     cs = sorted(list(set(available_countries_for_combo(flow, product, product_cat, type_str)) | {"World"}))
     x_country_sel.options = cs
@@ -846,6 +765,7 @@ def _refresh_snapshot_for_current_index(attr, old, new):
 for w in (s_flow, s_product, s_product_cat, s_type):
     w.on_change('value', _refresh_snapshot_for_current_index)
 
+# When product (or flow/type) changes on the snapshot side, update category choices first
 def _on_snapshot_product_change(attr, old, new):
     _update_snapshot_category_options()
     _refresh_snapshot_for_current_index(attr, old, new)
@@ -862,6 +782,7 @@ def on_month_slider(attr, old, new):
 month_slider.on_change('value', on_month_slider)
 
 def on_series_selector_change(attr, old, new):
+    # ensure category options are updated when product/flow/type changes
     _update_series_country_options()
     update_series_view()
 for w in (x_flow, x_product, x_product_cat, x_type):
@@ -923,7 +844,7 @@ snapshot_date_row = row(month_slider, play_button, pause_button, sizing_mode="st
 top15_buttons_row = row(top15_button, download_top15_button, reset_button, sizing_mode="stretch_width")
 TOP15_ROWS_VISIBLE = 15
 TOP15_ROW_HEIGHT   = 26
-TOP15_TABLE_HEIGHT = TOP15_ROWS_VISIBLE * TOP15_ROW_HEIGHT + 48
+TOP15_TABLE_HEIGHT = TOP15_ROWS_VISIBLE * TOP15_ROW_HEIGHT + 48  # + header/padding
 
 top15_table = DataTable(
     source=top15_table_source,
@@ -947,11 +868,13 @@ top15_col = column(
     width=370,
 )
 
-RIGHT_W = 370
-GUTTER  = 16
+RIGHT_W = 370   # Top-15 / series table column width
+GUTTER  = 16    # space between left and right columns
 
-LEFT_W_MAP = int(p.width)
+# SNAPSHOT (TOP) --------------------------------------------------------------
+LEFT_W_MAP = int(p.width)  # keep the map width exactly as defined earlier
 
+# Make selector rows fixed so they don't stretch under the right column
 snapshot_controls.sizing_mode = "stretch_width"
 snapshot_controls.width       = LEFT_W_MAP
 snapshot_date_row.sizing_mode = "stretch_width"
@@ -980,6 +903,7 @@ left_col = column(
     width=LEFT_W_MAP,
 )
 
+# Right column (Top-15) stays fixed width
 top15_col.width       = RIGHT_W
 top15_col.sizing_mode = "stretch_width"
 top15_col.margin      = (0, 0, 0, 0)
@@ -992,6 +916,7 @@ main_row = row(
     sizing_mode="stretch_width",
     width=snapshot_row_total_w,
 )
+# Top-align children so Top-15 starts flush with selectors
 main_row.styles = {"align-items": "flex-start"}
 
 snapshot_section = column(
@@ -1001,7 +926,8 @@ snapshot_section = column(
     width=snapshot_row_total_w,
 )
 
-# SERIES
+# SERIES (BOTTOM) -------------------------------------------------------------
+# Keep original series_chart.width
 LEFT_W_SERIES = int(series_chart.width)
 
 series_controls = row(x_flow, x_country_sel, x_product, x_product_cat, x_type)
@@ -1032,7 +958,7 @@ series_section = column(
     width=series_row_total_w,
 )
 
-# PAGE
+# PAGE ------------------------------------------------------------------------
 layout_total_w = max(snapshot_row_total_w, series_row_total_w)
 layout = column(
     app_title,
@@ -1042,9 +968,8 @@ layout = column(
     sizing_mode="stretch_width",
     width=layout_total_w,
 )
-
 # -----------------------------------------------------------------------------
-# Background image syncing
+# Background image syncing (Python-side, safe on Heroku)
 # -----------------------------------------------------------------------------
 def _prime_backgrounds():
     if None not in (p.x_range.start, p.x_range.end, p.y_range.start, p.y_range.end):
@@ -1079,7 +1004,7 @@ layout.name = "app_root"
 curdoc().add_root(layout)
 curdoc().title = "China — Trade: Snapshot & Series"
 
-# Loader hiding
+# --- Loader: hide ONLY when real data arrives ---
 _hide_loader_now = CustomJS(code="""
   const el = document.getElementById('bamboo-overlay');
   if (el) {
@@ -1103,7 +1028,7 @@ _fallback_hide = CustomJS(code="""
 """)
 p.js_on_event('document_ready', _fallback_hide)
 
-# Sync backgrounds
+# --- Sync backgrounds on pan/zoom (unchanged) ---
 p.x_range.on_change('start', _sync_map_bg)
 p.x_range.on_change('end',   _sync_map_bg)
 p.y_range.on_change('start', _sync_map_bg)
@@ -1113,8 +1038,8 @@ series_chart.x_range.on_change('end',   _sync_series_bg)
 series_chart.y_range.on_change('start', _sync_series_bg)
 series_chart.y_range.on_change('end',   _sync_series_bg)
 
-# Initial data fill
-print("[BOOT] Initializing UI with default data...")
+# --- Initial data fill (unchanged) ---
+# ensure category options respect initial product selections
 _update_snapshot_category_options()
 _update_series_category_options()
 if len(DATE_LIST) > 0:
@@ -1127,7 +1052,7 @@ _update_series_country_options()
 update_series_view()
 
 # -----------------------------------------------------------------------------
-# CSV downloads
+# CSV downloads (client-side JS)
 # -----------------------------------------------------------------------------
 _csv_js = """
 function toCSV(data) {
@@ -1162,15 +1087,13 @@ download_top15_button.js_on_click(CustomJS(
 ))
 
 # -----------------------------------------------------------------------------
-# Boot summary
+# Boot logs
 # -----------------------------------------------------------------------------
-print("[BOOT] ===== INITIALIZATION COMPLETE =====")
-print(f"[BOOT] CSV path: {DF_PATH.as_posix()}")
-print(f"[BOOT] CSV shape: {df.shape}")
-print(f"[BOOT] date_col: '{date_col}' dates: {df[date_col].dropna().shape[0]}")
-print(f"[BOOT] schema counts -> flows: {len(flows)}, countries: {len(countries)}, "
-      f"products: {len(products)}, types: {len(types_set)}, cols indexed: {len(key_to_col)}")
+print("[BOOT] CSV path:", DF_PATH.as_posix())
+print("[BOOT] CSV shape:", df.shape)
+print("[BOOT] date_col:", date_col, "dates:", df[date_col].dropna().shape[0])
+print("[BOOT] schema counts -> flows:", len(flows), "countries:", len(countries),
+      "products:", len(products), "types:", len(types_set), "cols indexed:", len(key_to_col))
 _default_combo = (default_flow, default_product, default_product_cat, default_type)
 _avail = [c for c in countries if (default_flow, c, default_product, default_product_cat, default_type) in key_to_col]
-print(f"[BOOT] Default combo: {_default_combo} country cols: {len(_avail)}")
-print("[BOOT] Ready to serve requests")
+print("[BOOT] Default combo:", _default_combo, "country cols:", len(_avail))
