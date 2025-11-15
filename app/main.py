@@ -1,4 +1,5 @@
 # app/main.py - COMPLETE VERSION with Optimized Data Support
+# VERSION: v2.0-COLUMNDATASOURCE-2024-11-15
 
 import json
 import re
@@ -49,6 +50,9 @@ WORLD_SHP = DATA_DIR / "ne_10m_admin_0_countries.shp"
 WORLD_GEOJSON = DATA_DIR / "ne_10m_admin_0_countries.geojson"
 OPTIMIZED_DIR = DATA_DIR / "optimized"
 
+print(f"[BOOT] ===================================")
+print(f"[BOOT] VERSION: v2.0-COLUMNDATASOURCE-2024-11-15")
+print(f"[BOOT] ===================================")
 print(f"[BOOT] Starting initialization...")
 
 # -----------------------------------------------------------------------------
@@ -543,7 +547,113 @@ filtered_world["exports_log"] = np.nan
 filtered_world["note"] = ""
 filtered_world["custom_color"] = "#dddddd"
 columns_to_keep = ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
-geo_source = GeoJSONDataSource(geojson=world_to_geojson(filtered_world[columns_to_keep]))
+
+# OPTIMIZATION: Convert to ColumnDataSource with static geometry
+# Build xs, ys arrays once from geometry
+print("[OPTIMIZE] Converting geometry to patches...")
+patches_data = {
+    'xs': [],
+    'ys': [],
+    'ADMIN': [],
+    'ADMIN_DISPLAY': [],
+    'exports': [],
+    'exports_log': [],
+    'note': [],
+    'custom_color': []
+}
+
+for idx, geo_row in filtered_world.iterrows():
+    geom = geo_row['geometry']
+    admin = geo_row['ADMIN']
+    admin_display = geo_row['ADMIN_DISPLAY']
+    
+    # Extract coordinates from geometry
+    if isinstance(geom, dict):
+        coords = geom.get('coordinates', [])
+        geom_type = geom.get('type', '')
+        
+        if geom_type == 'Polygon':
+            for ring in coords:
+                xs = [c[0] for c in ring]
+                ys = [c[1] for c in ring]
+                patches_data['xs'].append(xs)
+                patches_data['ys'].append(ys)
+                patches_data['ADMIN'].append(admin)
+                patches_data['ADMIN_DISPLAY'].append(admin_display)
+                patches_data['exports'].append(None)  # Use None instead of np.nan
+                patches_data['exports_log'].append(None)
+                patches_data['note'].append("")
+                patches_data['custom_color'].append("#dddddd")
+        
+        elif geom_type == 'MultiPolygon':
+            for polygon in coords:
+                for ring in polygon:
+                    xs = [c[0] for c in ring]
+                    ys = [c[1] for c in ring]
+                    patches_data['xs'].append(xs)
+                    patches_data['ys'].append(ys)
+                    patches_data['ADMIN'].append(admin)
+                    patches_data['ADMIN_DISPLAY'].append(admin_display)
+                    patches_data['exports'].append(None)  # Use None instead of np.nan
+                    patches_data['exports_log'].append(None)
+                    patches_data['note'].append("")
+                    patches_data['custom_color'].append("#dddddd")
+    
+    elif _using_gpd and hasattr(geom, 'geom_type'):
+        if geom.geom_type == 'Polygon':
+            xs, ys = geom.exterior.xy
+            patches_data['xs'].append(list(xs))
+            patches_data['ys'].append(list(ys))
+            patches_data['ADMIN'].append(admin)
+            patches_data['ADMIN_DISPLAY'].append(admin_display)
+            patches_data['exports'].append(None)  # Use None instead of np.nan
+            patches_data['exports_log'].append(None)
+            patches_data['note'].append("")
+            patches_data['custom_color'].append("#dddddd")
+        elif geom.geom_type == 'MultiPolygon':
+            for poly in geom.geoms:
+                xs, ys = poly.exterior.xy
+                patches_data['xs'].append(list(xs))
+                patches_data['ys'].append(list(ys))
+                patches_data['ADMIN'].append(admin)
+                patches_data['ADMIN_DISPLAY'].append(admin_display)
+                patches_data['exports'].append(None)  # Use None instead of np.nan
+                patches_data['exports_log'].append(None)
+                patches_data['note'].append("")
+                patches_data['custom_color'].append("#dddddd")
+
+print(f"[OPTIMIZE] Created {len(patches_data['xs'])} patches from {len(filtered_world)} countries")
+
+# CRITICAL: Validate data - no None/null values allowed in xs/ys
+print("[OPTIMIZE] Validating patch data...")
+for i, (xs, ys) in enumerate(zip(patches_data['xs'], patches_data['ys'])):
+    if xs is None or ys is None or len(xs) == 0 or len(ys) == 0:
+        print(f"[ERROR] Invalid patch at index {i}: xs={xs}, ys={ys}")
+    # Convert any numpy arrays to plain lists
+    if hasattr(xs, 'tolist'):
+        patches_data['xs'][i] = xs.tolist()
+    if hasattr(ys, 'tolist'):
+        patches_data['ys'][i] = ys.tolist()
+
+# Ensure exports/exports_log use None instead of np.nan for JS compatibility
+# Other fields should have appropriate defaults
+for i in range(len(patches_data['ADMIN'])):
+    if patches_data['exports'][i] is not None and np.isnan(patches_data['exports'][i]):
+        patches_data['exports'][i] = None
+    if patches_data['exports_log'][i] is not None and np.isnan(patches_data['exports_log'][i]):
+        patches_data['exports_log'][i] = None
+
+print(f"[OPTIMIZE] Validation complete. Sample patch: {len(patches_data['xs'][0])} points")
+
+# Use ColumnDataSource instead of GeoJSONDataSource
+geo_source = ColumnDataSource(patches_data)
+
+# Keep a mapping of admin name to patch indices for fast updates
+admin_to_patch_idx = {}
+for i, admin in enumerate(patches_data['ADMIN']):
+    if admin not in admin_to_patch_idx:
+        admin_to_patch_idx[admin] = []
+    admin_to_patch_idx[admin].append(i)
 
 top15_table_source = ColumnDataSource(data=dict(country=[], value=[]))
 top15_chart_source = ColumnDataSource(data=dict(country=[], value=[]))
@@ -559,7 +669,7 @@ p = figure(
     title=f"China, {default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
     tools=TOOLS, x_axis_location=None, y_axis_location=None,
     active_scroll='wheel_zoom', width=950, height=520,
-    output_backend="webgl"  # GPU acceleration for faster rendering
+    output_backend="webgl"  # GPU acceleration for even better performance
 )
 p.grid.grid_line_color = None
 
@@ -577,11 +687,26 @@ color_bar = ColorBar(color_mapper=color_mapper_obj, label_standoff=12, location=
 p.add_layout(color_bar, 'right')
 p.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen', text="www.eastasiaecon.com/cn/#charts"))
 
-patches = p.patches('xs', 'ys', source=geo_source, fill_color='custom_color',
-    fill_alpha=0.7, line_color="gray", line_width=0.5)
+# Create patches - use simple string reference for fill_color
+patches = p.patches(
+    xs='xs', 
+    ys='ys', 
+    source=geo_source, 
+    fill_color='custom_color',  # Simple string reference
+    fill_alpha=0.7, 
+    line_color="gray", 
+    line_width=0.5
+)
+
 hover = p.select_one(HoverTool)
 hover.point_policy = "follow_mouse"
-hover.tooltips = [("Country", "@ADMIN_DISPLAY"), ("Value", "@exports{0,0.00}"), ("Note", "@note")]
+hover.tooltips = [
+    ("Country", "@ADMIN_DISPLAY"), 
+    ("Value", "@exports{0,0.00}"),  # Will show NaN for None values
+    ("Note", "@note")
+]
+# Make hover more forgiving of None values
+hover.attachment = "horizontal"
 
 BACKGROUND_URL = "https://www.eastasiaecon.com/content/images/size/w2400/2023/04/Image-29-4-2023-at-7.34-PM.jpeg"
 bg_map_src = ColumnDataSource(dict(url=[BACKGROUND_URL],
@@ -757,7 +882,9 @@ def update_snapshot_by_index(i: int):
     )
 
     world_only_now = filtered_world["exports"].notna().sum() == 0
-    p.visible = not world_only_now
+    
+    # Keep map always visible - just show message div when no data
+    # p.visible = not world_only_now  # REMOVED - map stays visible
     top15_chart.visible = not world_only_now
     no_map_div.visible = world_only_now
     if world_only_now:
@@ -777,7 +904,42 @@ def update_snapshot_by_index(i: int):
     filtered_world.loc[filtered_world["ADMIN"] == "China", "note"] = "Exporter (no data)"
     filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
 
-    geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
+    # OPTIMIZATION: Update only the data fields, not geometry
+    # Build value lookup
+    value_lookup = {}
+    for idx, data_row in filtered_world.iterrows():
+        admin = data_row['ADMIN']
+        value_lookup[admin] = {
+            'exports': None if pd.isna(data_row['exports']) else float(data_row['exports']),
+            'exports_log': None if pd.isna(data_row['exports_log']) else float(data_row['exports_log']),
+            'note': data_row['note'],
+            'custom_color': data_row['custom_color']
+        }
+    
+    # Update patches data
+    current_data = dict(geo_source.data)  # Get current data as dict
+    # Create new lists for fields that will change
+    new_exports = list(current_data['exports'])
+    new_exports_log = list(current_data['exports_log'])
+    new_notes = list(current_data['note'])
+    new_colors = list(current_data['custom_color'])
+    
+    for i in range(len(current_data['ADMIN'])):
+        admin = current_data['ADMIN'][i]
+        if admin in value_lookup:
+            new_exports[i] = value_lookup[admin]['exports']
+            new_exports_log[i] = value_lookup[admin]['exports_log']
+            new_notes[i] = value_lookup[admin]['note']
+            new_colors[i] = value_lookup[admin]['custom_color']
+    
+    # Assign updated lists
+    current_data['exports'] = new_exports
+    current_data['exports_log'] = new_exports_log
+    current_data['note'] = new_notes
+    current_data['custom_color'] = new_colors
+    
+    # Trigger update
+    geo_source.data = current_data
 
     p.title.text = f"China, {flow}, {product}, {product_cat}, {type_str}, {row_date}"
     color_mapper_obj.low = vmin
@@ -815,7 +977,23 @@ def reset_top15():
     else:
         vmin, vmax = 0.0, 1.0
     filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
-    geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
+    
+    # OPTIMIZATION: Update only colors
+    value_lookup = {}
+    for idx, data_row in filtered_world.iterrows():
+        value_lookup[data_row['ADMIN']] = data_row['custom_color']
+    
+    current_data = dict(geo_source.data)  # Convert to plain dict
+    new_colors = list(current_data['custom_color'])
+    
+    for i in range(len(current_data['ADMIN'])):
+        admin = current_data['ADMIN'][i]
+        if admin in value_lookup:
+            new_colors[i] = value_lookup[admin]
+    
+    current_data['custom_color'] = new_colors
+    geo_source.data = current_data
+    
     top15_table_source.data = dict(country=[], value=[])
     top15_chart_source.data = dict(country=[], value=[])
     top15_chart.x_range.factors = []
@@ -846,7 +1024,22 @@ def highlight_top15():
     for i, ci in enumerate(top15_idx):
         colors[ci] = smooth_palette[int(idx[i])]
     filtered_world["custom_color"] = colors
-    geo_source.geojson = world_to_geojson(filtered_world[columns_to_keep])
+    
+    # OPTIMIZATION: Update only colors
+    value_lookup = {}
+    for idx, data_row in filtered_world.iterrows():
+        value_lookup[data_row['ADMIN']] = data_row['custom_color']
+    
+    current_data = dict(geo_source.data)  # Convert to plain dict
+    new_colors = list(current_data['custom_color'])
+    
+    for i in range(len(current_data['ADMIN'])):
+        admin = current_data['ADMIN'][i]
+        if admin in value_lookup:
+            new_colors[i] = value_lookup[admin]
+    
+    current_data['custom_color'] = new_colors
+    geo_source.data = current_data
 
     terms_dict = {
         "United States of America": "US",
@@ -1122,7 +1315,7 @@ _hide_loader_now = CustomJS(code="""
     el.style.display = 'none';
   }
 """)
-geo_source.js_on_change('geojson', _hide_loader_now)
+geo_source.js_on_change('data', _hide_loader_now)  # Use 'data' for ColumnDataSource, not 'geojson'
 series_source.js_on_change('data', _hide_loader_now)
 
 _fallback_hide = CustomJS(code="""
@@ -1149,13 +1342,26 @@ series_chart.y_range.on_change('end', _sync_series_bg)
 _update_snapshot_category_options()
 _update_series_category_options()
 if len(DATE_LIST) > 0:
+    print(f"[BOOT] Calling update_snapshot_by_index with index {len(DATE_LIST) - 1}")
     month_slider.value = len(DATE_LIST) - 1
-    update_snapshot_by_index(month_slider.value)
+    try:
+        update_snapshot_by_index(month_slider.value)
+        print("[BOOT] ✅ Initial map update completed")
+    except Exception as e:
+        print(f"[ERROR] Initial map update failed: {e}")
+        import traceback
+        traceback.print_exc()
 else:
     month_slider.title = "Month"
 
 _update_series_country_options()
-update_series_view()
+try:
+    update_series_view()
+    print("[BOOT] ✅ Initial series update completed")
+except Exception as e:
+    print(f"[ERROR] Initial series update failed: {e}")
+    import traceback
+    traceback.print_exc()
 
 # CSV downloads
 _csv_js = """
