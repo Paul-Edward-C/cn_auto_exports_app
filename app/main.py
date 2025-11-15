@@ -559,6 +559,7 @@ p = figure(
     title=f"China, {default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
     tools=TOOLS, x_axis_location=None, y_axis_location=None,
     active_scroll='wheel_zoom', width=950, height=520,
+    output_backend="webgl"  # GPU acceleration for faster rendering
 )
 p.grid.grid_line_color = None
 
