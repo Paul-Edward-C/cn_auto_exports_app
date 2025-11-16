@@ -27,7 +27,7 @@ from bokeh.models import (
     GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div, Label,
     NumeralTickFormatter, DatetimeTickFormatter, DataTable, TableColumn,
     HTMLTemplateFormatter, ColorBar, LinearColorMapper, Spacer, DataRange1d,
-    InlineStyleSheet, Slider, CustomJS
+    InlineStyleSheet, Slider, CustomJS, SaveTool, LinearAxis
 )
 from bokeh.plotting import figure
 from bokeh.layouts import column as bokeh_column, row as bokeh_row
@@ -340,10 +340,16 @@ def _total_bounds_df(df_like):
         xmins.append(xmin); ymins.append(ymin); xmaxs.append(xmax); ymaxs.append(ymax)
     return (min(xmins), min(ymins), max(xmaxs), max(ymaxs)) if xmins else (0, 0, 1, 1)
 
-# Theme
+# Theme - Match your other workflow settings (without toolbar override)
 theme_json = {
     'attrs': {
-        'figure': {'background_fill_color': '#228B22', 'background_fill_alpha': 0.05},
+        'figure': {
+            'width': 972,
+            'height': 589,
+            # Removed 'toolbar_location': None - let each figure control its own toolbar
+            'background_fill_color': '#228B22', 
+            'background_fill_alpha': 0.05
+        },
         'Axis': {'axis_label_text_font': 'Georgia', 'major_label_text_font': 'Georgia'},
         'Title': {'text_font_style': 'bold', 'text_font': 'Georgia', 'text_font_size': '18px'},
         'Legend': {'label_text_font': 'Georgia', 'padding': 1, 'spacing': 1, 'background_fill_alpha': 0.7},
@@ -662,14 +668,18 @@ series_source = ColumnDataSource(data=dict(date=[], value=[]))
 series_table_source = ColumnDataSource(data=dict(index=[], date=[], value=[]))
 
 # Figures
-TOOLS = "pan,wheel_zoom,box_zoom,reset,hover,save"
+# Create custom save tool with explicit export dimensions
+save_tool = SaveTool()
+TOOLS = ["pan", "wheel_zoom", "box_zoom", "reset", "hover", save_tool]
 latest_label = latest_date_label()
 
 p = figure(
     title=f"China, {default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
     tools=TOOLS, x_axis_location=None, y_axis_location=None,
-    active_scroll='wheel_zoom', width=972, height=589,  # Standard export size
-    output_backend="webgl"  # GPU acceleration for even better performance
+    active_scroll='wheel_zoom', 
+    width=972, height=589,  # Match theme settings from other workflow
+    toolbar_location="right",  # Override theme's null toolbar
+    output_backend="webgl"
 )
 p.grid.grid_line_color = None
 
@@ -730,31 +740,60 @@ top15_chart.title.text_font_size = "14px"
 series_xr = DataRange1d(only_visible=True, range_padding=0.02)
 series_yr = DataRange1d(only_visible=True, range_padding=0.08)
 
+# Create custom save tool for series chart
+series_save_tool = SaveTool()
+
 series_chart = figure(
-    height=589, width=972, title="Series",  # Standard export size
+    height=589, width=972, title="Series",
     x_axis_type="datetime",
     x_range=series_xr, y_range=series_yr,
-    tools="pan,xwheel_zoom,box_zoom,reset,save",
+    tools=["pan", "xwheel_zoom", "box_zoom", "reset", series_save_tool],
+    toolbar_location="right",
     margin=(20, 10, 10, 10)
 )
-line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=3, color='#556B2F')
+line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=3, color = '#556B2F')
 #pts_ts = series_chart.scatter(x="date", y="value", source=series_source, size=5, alpha=0.15)
-series_xr.renderers = [line_ts, 
-                       #pts_ts
-                       ]
-series_yr.renderers = [line_ts,
-                       #pts_ts
-                       ]
+series_xr.renderers = [line_ts]
+series_yr.renderers = [line_ts]
+
+# Add right y-axis (mirroring the left axis)
+right_axis = LinearAxis(y_range_name="default")
+right_axis.formatter = NumeralTickFormatter(format="0,0.0")
+series_chart.add_layout(right_axis, 'right')
+
+# Apply custom formatting from your workflow
+# Left Y-axis
+series_chart.yaxis.formatter = NumeralTickFormatter(format="0,0.0")
+series_chart.yaxis.axis_label_text_font = "Georgia"
+series_chart.yaxis.axis_label_text_font_size = "18px"
+series_chart.yaxis.major_label_text_font = "Georgia"
+series_chart.yaxis.major_label_text_font_size = "20px"
+
+# Right Y-axis (already has formatter from above)
+right_axis.axis_label_text_font = "Georgia"
+right_axis.axis_label_text_font_size = "18px"
+right_axis.major_label_text_font = "Georgia"
+right_axis.major_label_text_font_size = "20px"
+
+# X-axis
+series_chart.xaxis.formatter = DatetimeTickFormatter(months="%b %Y")
+series_chart.xaxis.axis_label_text_font = "Georgia"
+series_chart.xaxis.axis_label_text_font_size = "18px"
+series_chart.xaxis.major_label_text_font = "Georgia"
+series_chart.xaxis.major_label_text_font_size = "20px"
+
+# Title
+series_chart.title.text_font_style = "bold"
+series_chart.title.text_font = "Georgia"
+series_chart.title.text_font_size = "25px"
 
 hover_ts = HoverTool(
-#    renderers=[pts_ts],
-    tooltips=[("Date", "@date{%b %Y}"), ("Value", "@value{0,0.00}")],
+    renderers=[line_ts],
+    tooltips=[("Date", "@date{%b %Y}"), ("Value", "@value{0,0.0}")],
     formatters={"@date": "datetime"},
     mode="vline"
 )
 series_chart.add_tools(hover_ts)
-series_chart.yaxis.formatter = NumeralTickFormatter(format="0,0.00")
-series_chart.xaxis.formatter = DatetimeTickFormatter(years="%b-%y", months="%b-%y")
 series_chart.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen', text="www.eastasiaecon.com/cn/#charts"))
 
 bg_series_src = ColumnDataSource(dict(url=[BACKGROUND_URL], x=[0], y=[0], w=[1], h=[1]))
@@ -1272,7 +1311,7 @@ series_section = column(
     width=series_row_total_w,
 )
 
-# PAGE - Fixed width, centered layout for consistency across devices
+# PAGE - Fixed width, left-aligned layout for consistency across devices
 layout_total_w = 1358  # 972 + 16 + 370 (both sections have same width)
 layout = column(
     app_title,
@@ -1282,9 +1321,9 @@ layout = column(
     width=layout_total_w,
 )
 
-# Center the layout on the page
+# Left-align the layout
 layout.styles = {
-    "margin": "0 auto",  # Center horizontally
+    "margin": "0",  # Left-aligned
     "max-width": "1358px",  # Constrain max width
     "padding": "0 20px",  # Add padding on small screens
 }
@@ -1304,11 +1343,11 @@ def _sync_series_bg(attr, old, new):
 
 layout.name = "app_root"
 
-# Add inline CSS to force fixed, centered layout
+# Add inline CSS to force fixed, left-aligned layout
 layout.styles = {
     "width": "1358px",
     "max-width": "1358px", 
-    "margin": "0 auto",
+    "margin": "0",  # Left-aligned
     "padding": "0 20px",
     "box-sizing": "border-box"
 }
