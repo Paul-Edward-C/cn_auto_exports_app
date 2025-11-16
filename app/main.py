@@ -529,7 +529,7 @@ pause_button = Button(label="❚❚ Pause", width=90, disabled=True)
 
 app_footnote = Div(
     text="Source: EAE, CCA",
-    width=980,
+    width=972,  # Match figure width
     styles={
         "font-family": "Georgia, serif",
         "font-size": "12px",
@@ -668,7 +668,7 @@ latest_label = latest_date_label()
 p = figure(
     title=f"China, {default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
     tools=TOOLS, x_axis_location=None, y_axis_location=None,
-    active_scroll='wheel_zoom', width=950, height=520,
+    active_scroll='wheel_zoom', width=972, height=589,  # Standard export size
     output_backend="webgl"  # GPU acceleration for even better performance
 )
 p.grid.grid_line_color = None
@@ -731,19 +731,23 @@ series_xr = DataRange1d(only_visible=True, range_padding=0.02)
 series_yr = DataRange1d(only_visible=True, range_padding=0.08)
 
 series_chart = figure(
-    height=260, width=980, title="Series",
+    height=589, width=972, title="Series",  # Standard export size
     x_axis_type="datetime",
     x_range=series_xr, y_range=series_yr,
     tools="pan,xwheel_zoom,box_zoom,reset,save",
     margin=(20, 10, 10, 10)
 )
-line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=2)
-pts_ts = series_chart.scatter(x="date", y="value", source=series_source, size=5, alpha=0.15)
-series_xr.renderers = [line_ts, pts_ts]
-series_yr.renderers = [line_ts, pts_ts]
+line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=3, color='#556B2F')
+#pts_ts = series_chart.scatter(x="date", y="value", source=series_source, size=5, alpha=0.15)
+series_xr.renderers = [line_ts, 
+                       #pts_ts
+                       ]
+series_yr.renderers = [line_ts,
+                       #pts_ts
+                       ]
 
 hover_ts = HoverTool(
-    renderers=[pts_ts],
+#    renderers=[pts_ts],
     tooltips=[("Date", "@date{%b %Y}"), ("Value", "@value{0,0.00}")],
     formatters={"@date": "datetime"},
     mode="vline"
@@ -862,7 +866,7 @@ def _update_series_category_options():
             x_product_cat.value = cats[0] if cats else default_product_cat
 
 # Snapshot update
-no_map_div = Div(text="", width=980, height=20)
+no_map_div = Div(text="", width=972, height=20)  # Match figure width
 
 def _set_slider_title(i: int):
     if 0 <= i < len(DATE_LABELS):
@@ -1147,7 +1151,7 @@ app_title = Div(
 
 snapshot_heading = Div(
     text="<b>Global snapshot</b> — values by country at selected date",
-    width=980,
+    width=972,  # Match figure width
     styles={
         "font-family": "Georgia, serif", "font-size": "20px", "font-weight": "bold", "color": "black",
         "border-bottom": "2px solid #104b1f", "padding-bottom": "4px",
@@ -1156,15 +1160,18 @@ snapshot_heading = Div(
 
 series_heading = Div(
     text="<b>Time series</b>",
-    width=980,
+    width=972,  # Match figure width
     styles={
         "font-family": "Georgia, serif", "font-size": "20px", "font-weight": "bold", "color": "black",
         "border-bottom": "2px solid #104b1f", "padding-bottom": "4px",
     },
 )
 
-snapshot_controls = row(s_flow, s_product, s_product_cat, s_type, sizing_mode="stretch_width")
-snapshot_date_row = row(month_slider, play_button, pause_button, sizing_mode="stretch_width")
+snapshot_controls = row(s_flow, s_product, s_product_cat, s_type)
+snapshot_controls.width = 972  # Fixed to map width
+
+snapshot_date_row = row(month_slider, play_button, pause_button)
+snapshot_date_row.width = 972  # Fixed to map width
 
 top15_buttons_row = row(top15_button, download_top15_button, reset_button, sizing_mode="stretch_width")
 TOP15_ROWS_VISIBLE = 15
@@ -1189,20 +1196,13 @@ top15_col = column(
     top15_chart,
     Spacer(height=8),
     top15_table,
-    sizing_mode="stretch_width",
-    width=370,
+    width=370,  # Fixed width, no stretching
 )
 
 RIGHT_W = 370
 GUTTER = 16
 
-LEFT_W_MAP = int(p.width)
-
-snapshot_controls.sizing_mode = "stretch_width"
-snapshot_controls.width = LEFT_W_MAP
-snapshot_date_row.sizing_mode = "stretch_width"
-snapshot_date_row.width = LEFT_W_MAP
-
+# Remove fixed widths - let elements use their natural size
 left_col = column(
     snapshot_controls,
     snapshot_date_row,
@@ -1210,7 +1210,7 @@ left_col = column(
     p,
     Div(
         text="<i>Note: Map displays only trade flows ≥ $10M USD. Smaller values are excluded for performance.</i>",
-        width=950,
+        width=972,  # Match figure width
         styles={
             "font-family": "Georgia, serif",
             "font-size": "11px",
@@ -1222,20 +1222,19 @@ left_col = column(
             "border-left": "3px solid #556B2F"
         }
     ),
-    sizing_mode="stretch_width",
-    width=LEFT_W_MAP,
+    width=972,  # Fixed to figure width
 )
 
+# Fixed width for top15 column
 top15_col.width = RIGHT_W
-top15_col.sizing_mode = "stretch_width"
 top15_col.margin = (0, 0, 0, 0)
 
-snapshot_row_total_w = LEFT_W_MAP + GUTTER + RIGHT_W
+# Main row with fixed total width for consistency
+snapshot_row_total_w = 972 + GUTTER + RIGHT_W  # 1358px total
 main_row = row(
     left_col,
     Spacer(width=GUTTER),
     top15_col,
-    sizing_mode="stretch_width",
     width=snapshot_row_total_w,
 )
 main_row.styles = {"align-items": "flex-start"}
@@ -1243,51 +1242,52 @@ main_row.styles = {"align-items": "flex-start"}
 snapshot_section = column(
     snapshot_heading,
     main_row,
-    sizing_mode="stretch_width",
     width=snapshot_row_total_w,
 )
 
 # SERIES
-LEFT_W_SERIES = int(series_chart.width)
+series_left = column(series_chart, width=972)  # Match map width
+series_right = column(series_table, width=RIGHT_W)
 
-series_controls = row(x_flow, x_country_sel, x_product, x_product_cat, x_type)
-series_controls.sizing_mode = "stretch_width"
-series_controls.width = LEFT_W_SERIES + GUTTER + RIGHT_W
-
-series_left = column(series_chart, sizing_mode="stretch_width", width=LEFT_W_SERIES)
-series_right = column(series_table, sizing_mode="stretch_width", width=RIGHT_W)
-
-series_row_total_w = LEFT_W_SERIES + GUTTER + RIGHT_W
+series_row_total_w = 972 + GUTTER + RIGHT_W  # 1358px total (same as snapshot)
 series_row = row(
     series_left,
     Spacer(width=GUTTER),
     series_right,
-    sizing_mode="stretch_width",
     width=series_row_total_w,
 )
 series_row.styles = {"align-items": "flex-start"}
 
-series_buttons = row(download_series_button, sizing_mode="stretch_width", width=series_row_total_w)
+# Controls span full width
+series_controls = row(x_flow, x_country_sel, x_product, x_product_cat, x_type)
+series_controls.width = series_row_total_w
+
+series_buttons = row(download_series_button, width=series_row_total_w)
 
 series_section = column(
     series_heading,
     series_controls,
     series_row,
     series_buttons,
-    sizing_mode="stretch_width",
     width=series_row_total_w,
 )
 
-# PAGE
-layout_total_w = max(snapshot_row_total_w, series_row_total_w)
+# PAGE - Fixed width, centered layout for consistency across devices
+layout_total_w = 1358  # 972 + 16 + 370 (both sections have same width)
 layout = column(
     app_title,
     snapshot_section,
     series_section,
     app_footnote,
-    sizing_mode="stretch_width",
     width=layout_total_w,
 )
+
+# Center the layout on the page
+layout.styles = {
+    "margin": "0 auto",  # Center horizontally
+    "max-width": "1358px",  # Constrain max width
+    "padding": "0 20px",  # Add padding on small screens
+}
 
 # Background syncing
 def _sync_map_bg(attr, old, new):
@@ -1303,6 +1303,20 @@ def _sync_series_bg(attr, old, new):
     )
 
 layout.name = "app_root"
+
+# Add inline CSS to force fixed, centered layout
+layout.styles = {
+    "width": "1358px",
+    "max-width": "1358px", 
+    "margin": "0 auto",
+    "padding": "0 20px",
+    "box-sizing": "border-box"
+}
+
+# Also force the sections to not stretch
+snapshot_section.styles = {"width": "1358px", "max-width": "1358px"}
+series_section.styles = {"width": "1358px", "max-width": "1358px"}
+
 curdoc().add_root(layout)
 curdoc().title = "China — Trade: Snapshot & Series"
 
