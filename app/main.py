@@ -683,6 +683,11 @@ p = figure(
 )
 p.grid.grid_line_color = None
 
+# Apply same title formatting as series chart
+p.title.text_font_style = "bold"
+p.title.text_font = "Georgia"
+p.title.text_font_size = "25px"
+
 if _using_gpd:
     xmin, ymin, xmax, ymax = filtered_world.total_bounds
 else:
@@ -1286,7 +1291,11 @@ snapshot_section = column(
 
 # SERIES
 series_left = column(series_chart, width=972)  # Match map width
-series_right = column(series_table, width=RIGHT_W)
+series_right = column(
+    series_table, 
+    download_series_button,  # Moved here - below the table
+    width=RIGHT_W
+)
 
 series_row_total_w = 972 + GUTTER + RIGHT_W  # 1358px total (same as snapshot)
 series_row = row(
@@ -1301,13 +1310,13 @@ series_row.styles = {"align-items": "flex-start"}
 series_controls = row(x_flow, x_country_sel, x_product, x_product_cat, x_type)
 series_controls.width = series_row_total_w
 
-series_buttons = row(download_series_button, width=series_row_total_w)
+# Remove series_buttons row since button is now in series_right column
 
 series_section = column(
     series_heading,
     series_controls,
     series_row,
-    series_buttons,
+    # series_buttons removed - button is now in series_right
     width=series_row_total_w,
 )
 
