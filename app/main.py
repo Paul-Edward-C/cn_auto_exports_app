@@ -787,8 +787,8 @@ series_chart = figure(
     margin=(20, 10, 10, 10)
 )
 
-# Initial line (will be hidden, used for single-series mode fallback)
-line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=3, color='#556B2F', visible=False)
+# Primary line shows current selection (always visible as preview)
+line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=3, color='#556B2F', alpha=0.8)
 series_xr.renderers = [line_ts]
 series_yr.renderers = [line_ts]
 
@@ -796,10 +796,12 @@ series_yr.renderers = [line_ts]
 zero_span = Span(location=0, dimension='width', line_color='#999999', line_dash='solid', line_width=1)
 series_chart.add_layout(zero_span)
 
-# Legend for multi-series (initially empty)
+# Legend for multi-series (initially empty, inside chart)
 series_legend = Legend(items=[], location="top_left", click_policy="hide",
-                       label_text_font="Georgia", label_text_font_size="12px")
-series_chart.add_layout(series_legend, 'right')
+                       label_text_font="Georgia", label_text_font_size="12px",
+                       background_fill_alpha=0.7, background_fill_color="white",
+                       border_line_color="#556B2F", border_line_alpha=0.5)
+series_chart.add_layout(series_legend)
 
 # Add right y-axis (mirroring the left axis)
 right_axis = LinearAxis(y_range_name="default")
@@ -901,11 +903,17 @@ SWITCH_CSS = """
     width: 40px;
     height: 20px;
 }
-:host .bk-switch input:checked + .bk-knob {
-    background-color: #104b1f;
-}
 :host .bk-switch .bk-knob {
     background-color: #999999;
+}
+:host .bk-switch input:checked + .bk-knob {
+    background-color: #556B2F;
+}
+:host .bk-switch .bk-bar {
+    background-color: hsla(120, 100%, 25%, 0.2);
+}
+:host .bk-switch input:checked + .bk-knob + .bk-bar {
+    background-color: hsla(120, 100%, 25%, 0.3);
 }
 """
 btn_sheet = InlineStyleSheet(css=BTN_CSS)
@@ -1329,33 +1337,24 @@ def add_series_to_chart():
     series_legend.items = [LegendItem(label=item['label'], renderers=[item['renderer']])
                           for item in multi_series_data]
 
-    # Update range renderers to include all lines
-    series_xr.renderers = [item['renderer'] for item in multi_series_data]
-    series_yr.renderers = [item['renderer'] for item in multi_series_data]
-
-    # Update chart title
-    if len(multi_series_data) == 1:
-        series_chart.title.text = f"China, {flow}, {country}, {product}, {product_cat}, {type_str}"
-    else:
-        series_chart.title.text = f"Multiple Series ({len(multi_series_data)})"
+    # Update range renderers to include primary line plus all added series
+    series_xr.renderers = [line_ts] + [item['renderer'] for item in multi_series_data]
+    series_yr.renderers = [line_ts] + [item['renderer'] for item in multi_series_data]
 
 def clear_all_series():
-    """Remove all series from the chart"""
+    """Remove all added series from the chart"""
     global multi_series_data
 
-    # Remove all renderers
+    # Hide all added series renderers
     for item in multi_series_data:
         item['renderer'].visible = False
 
     multi_series_data = []
     series_legend.items = []
 
-    # Reset to single series mode
+    # Reset range renderers to just primary line
     series_xr.renderers = [line_ts]
     series_yr.renderers = [line_ts]
-
-    # Update view with current selection
-    update_series_view()
 
 add_series_button.on_click(add_series_to_chart)
 clear_series_button.on_click(clear_all_series)
