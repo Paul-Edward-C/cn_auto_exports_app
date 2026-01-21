@@ -27,7 +27,7 @@ from bokeh.models import (
     GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div, Label,
     NumeralTickFormatter, DatetimeTickFormatter, DataTable, TableColumn,
     HTMLTemplateFormatter, ColorBar, LinearColorMapper, Spacer, DataRange1d,
-    InlineStyleSheet, Slider, CustomJS, SaveTool, LinearAxis
+    InlineStyleSheet, Slider, CustomJS, SaveTool, LinearAxis, Switch
 )
 from bokeh.plotting import figure
 from bokeh.layouts import column as bokeh_column, row as bokeh_row
@@ -466,6 +466,21 @@ def is_currency_type(type_str):
 def should_log(flow, type_str):
     return flow != 'Balance' and is_currency_type(type_str)
 
+def has_sa_data(flow, country, product, product_cat, unit):
+    """Check if seasonally adjusted data exists for this combination"""
+    sa_unit = f"{unit}, SA"
+    if USE_OPTIMIZED:
+        mask = (
+            (metadata_df['flow'] == flow) &
+            (metadata_df['country'] == country) &
+            (metadata_df['product'] == product) &
+            (metadata_df['product_cat'] == product_cat) &
+            (metadata_df['unit'] == sa_unit)
+        )
+        return mask.any()
+    else:
+        return (flow, country, product, product_cat, sa_unit) in key_to_col
+
 def world_to_geojson(df_like):
     cols = ['ADMIN', 'ADMIN_DISPLAY', 'exports', 'exports_log', 'note', 'custom_color', 'geometry']
     df_like = df_like[cols]
@@ -523,6 +538,16 @@ x_product = Select(title="Product", value=default_product, options=sorted(list(p
 x_product_cat = Select(title="Category", value=default_product_cat, options=sorted(list(product_cats)), width=200)
 x_type = Select(title="Unit", value=default_type, options=sorted(list(types_set)), width=140)
 x_country_sel = Select(title="Country", value="World", options=["World"], width=220)
+
+# SA toggle for series section
+x_sa_toggle = Switch(active=False, width=40)
+x_sa_label = Div(text="SA", width=30, styles={
+    "font-family": "Georgia, serif",
+    "font-size": "14px",
+    "font-weight": "bold",
+    "color": "#556B2F",
+    "padding-top": "6px"
+})
 
 def cur_series():
     return (x_flow.value, x_country_sel.value, x_product.value, x_product_cat.value, x_type.value)
@@ -853,9 +878,22 @@ SELECTS_CSS = """
     background: #104b1f;
 }
 """
+SWITCH_CSS = """
+:host .bk-switch {
+    width: 40px;
+    height: 20px;
+}
+:host .bk-switch input:checked + .bk-knob {
+    background-color: #104b1f;
+}
+:host .bk-switch .bk-knob {
+    background-color: #999999;
+}
+"""
 btn_sheet = InlineStyleSheet(css=BTN_CSS)
 reset_sheet = InlineStyleSheet(css=RESET_CSS)
 selects_sheet = InlineStyleSheet(css=SELECTS_CSS)
+switch_sheet = InlineStyleSheet(css=SWITCH_CSS)
 
 for b in (top15_button, download_top15_button, download_series_button):
     b.stylesheets = [btn_sheet]
@@ -864,6 +902,8 @@ reset_button.stylesheets = [reset_sheet]
 for w in (s_flow, s_product, s_product_cat, s_type,
           x_flow, x_product, x_product_cat, x_type, x_country_sel):
     w.stylesheets = [selects_sheet]
+
+x_sa_toggle.stylesheets = [switch_sheet]
 
 for b in (top15_button, download_top15_button, download_series_button):
     b.css_classes = ["styled-btn"]
@@ -1113,18 +1153,60 @@ def _update_series_country_options():
     if x_country_sel.value not in cs:
         x_country_sel.value = "World"
 
+def _update_sa_toggle_state():
+    """Enable/disable SA toggle based on data availability"""
+    flow, country, product, product_cat, type_str = cur_series()
+    sa_available = has_sa_data(flow, country, product, product_cat, type_str)
+    x_sa_toggle.disabled = not sa_available
+    if not sa_available:
+        x_sa_toggle.active = False
+    # Update label style to show availability
+    if sa_available:
+        x_sa_label.styles = {
+            "font-family": "Georgia, serif",
+            "font-size": "14px",
+            "font-weight": "bold",
+            "color": "#556B2F",
+            "padding-top": "6px"
+        }
+    else:
+        x_sa_label.styles = {
+            "font-family": "Georgia, serif",
+            "font-size": "14px",
+            "font-weight": "bold",
+            "color": "#999999",
+            "padding-top": "6px"
+        }
+
 def update_series_view():
     flow, country, product, product_cat, type_str = cur_series()
-    
+
+    # Update SA toggle availability
+    _update_sa_toggle_state()
+
+    # Use SA unit if toggle is active
+    display_unit = type_str
+    if x_sa_toggle.active:
+        sa_unit = f"{type_str}, SA"
+        display_unit = sa_unit
+        type_str = sa_unit
+
     # Get series data
     series_data = get_data_for_series(flow, country, product, product_cat, type_str)
-    
+
     dates = series_data.index.to_list()
     values = series_data.values.tolist()
-    
+
     series_source.data = dict(date=dates, value=values)
-    series_chart.title.text = f"China, {flow}, {country}, {product}, {product_cat}, {type_str}"
-    
+    series_chart.title.text = f"China, {flow}, {country}, {product}, {product_cat}, {display_unit}"
+
+    # Update table column header to indicate SA
+    value_title = "Value (SA)" if x_sa_toggle.active else "Value"
+    series_table.columns = [
+        TableColumn(field="date", title="Date", width=date_width),
+        TableColumn(field="value", title=value_title, formatter=formatter, width=val_width),
+    ]
+
     if len(dates) > 0:
         last = pd.DataFrame({"date": dates, "value": values}).tail(24)
         series_table_source.data = dict(
@@ -1163,6 +1245,9 @@ def on_series_selector_change(attr, old, new):
 for w in (x_flow, x_product, x_product_cat, x_type):
     w.on_change('value', on_series_selector_change)
 x_country_sel.on_change('value', lambda attr, old, new: update_series_view())
+
+# SA toggle callback
+x_sa_toggle.on_change('active', lambda attr, old, new: update_series_view())
 
 # Play/Pause
 ANIM_INTERVAL_MS = 600
@@ -1306,8 +1391,9 @@ series_row = row(
 )
 series_row.styles = {"align-items": "flex-start"}
 
-# Controls span full width
-series_controls = row(x_flow, x_country_sel, x_product, x_product_cat, x_type)
+# Controls span full width - include SA toggle
+sa_toggle_group = row(x_sa_label, x_sa_toggle, spacing=5)
+series_controls = row(x_flow, x_country_sel, x_product, x_product_cat, x_type, Spacer(width=20), sa_toggle_group)
 series_controls.width = series_row_total_w
 
 # Remove series_buttons row since button is now in series_right column
