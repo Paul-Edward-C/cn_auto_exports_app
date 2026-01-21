@@ -27,7 +27,7 @@ from bokeh.models import (
     GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div, Label,
     NumeralTickFormatter, DatetimeTickFormatter, DataTable, TableColumn,
     HTMLTemplateFormatter, ColorBar, LinearColorMapper, Spacer, DataRange1d,
-    InlineStyleSheet, Slider, CustomJS, SaveTool, LinearAxis, Switch
+    InlineStyleSheet, Slider, CustomJS, SaveTool, LinearAxis, Switch, Span
 )
 from bokeh.plotting import figure
 from bokeh.layouts import column as bokeh_column, row as bokeh_row
@@ -785,6 +785,10 @@ line_ts = series_chart.line(x="date", y="value", source=series_source, line_widt
 #pts_ts = series_chart.scatter(x="date", y="value", source=series_source, size=5, alpha=0.15)
 series_xr.renderers = [line_ts]
 series_yr.renderers = [line_ts]
+
+# Horizontal span at zero
+zero_span = Span(location=0, dimension='width', line_color='#999999', line_dash='dashed', line_width=1)
+series_chart.add_layout(zero_span)
 
 # Add right y-axis (mirroring the left axis)
 right_axis = LinearAxis(y_range_name="default")
