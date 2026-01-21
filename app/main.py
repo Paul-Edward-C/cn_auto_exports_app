@@ -27,7 +27,7 @@ from bokeh.models import (
     GeoJSONDataSource, Select, Button, ColumnDataSource, HoverTool, Div, Label,
     NumeralTickFormatter, DatetimeTickFormatter, DataTable, TableColumn,
     HTMLTemplateFormatter, ColorBar, LinearColorMapper, Spacer, DataRange1d,
-    InlineStyleSheet, Slider, CustomJS, SaveTool, LinearAxis, Switch, Span
+    InlineStyleSheet, Slider, CustomJS, SaveTool, LinearAxis, Switch, Span, Legend, LegendItem
 )
 from bokeh.plotting import figure
 from bokeh.layouts import column as bokeh_column, row as bokeh_row
@@ -692,6 +692,11 @@ top15_chart_source = ColumnDataSource(data=dict(country=[], value=[]))
 series_source = ColumnDataSource(data=dict(date=[], value=[]))
 series_table_source = ColumnDataSource(data=dict(index=[], date=[], value=[]))
 
+# Multi-series support
+SERIES_COLORS = ['#556B2F', '#B7410E', '#4682B4', '#FF7F50', '#8B008B', '#008B8B', '#DAA520', '#2F4F4F']
+multi_series_data = []  # List of {source, renderer, label, key}
+multi_series_legend_items = []
+
 # Figures
 # Create custom save tool with explicit export dimensions
 save_tool = SaveTool()
@@ -781,14 +786,20 @@ series_chart = figure(
     toolbar_location="right",
     margin=(20, 10, 10, 10)
 )
-line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=3, color = '#556B2F')
-#pts_ts = series_chart.scatter(x="date", y="value", source=series_source, size=5, alpha=0.15)
+
+# Initial line (will be hidden, used for single-series mode fallback)
+line_ts = series_chart.line(x="date", y="value", source=series_source, line_width=3, color='#556B2F', visible=False)
 series_xr.renderers = [line_ts]
 series_yr.renderers = [line_ts]
 
 # Horizontal span at zero
-zero_span = Span(location=0, dimension='width', line_color='#999999', line_dash='dashed', line_width=1)
+zero_span = Span(location=0, dimension='width', line_color='#999999', line_dash='solid', line_width=1)
 series_chart.add_layout(zero_span)
+
+# Legend for multi-series (initially empty)
+series_legend = Legend(items=[], location="top_left", click_policy="hide",
+                       label_text_font="Georgia", label_text_font_size="12px")
+series_chart.add_layout(series_legend, 'right')
 
 # Add right y-axis (mirroring the left axis)
 right_axis = LinearAxis(y_range_name="default")
@@ -822,7 +833,6 @@ series_chart.title.text_font = "Georgia"
 series_chart.title.text_font_size = "25px"
 
 hover_ts = HoverTool(
-    renderers=[line_ts],
     tooltips=[("Date", "@date{%b %Y}"), ("Value", "@value{0,0.0}")],
     formatters={"@date": "datetime"},
     mode="vline"
@@ -854,6 +864,10 @@ top15_button = Button(label="Highlight Top 15", button_type="success", width=220
 reset_button = Button(label="🔄", button_type="default", width=40, height=35)
 download_series_button = Button(label="Download Series CSV", button_type="primary", width=220, height=35)
 download_top15_button = Button(label="Download Top 15 CSV", button_type="primary", width=220, height=35)
+
+# Multi-series buttons
+add_series_button = Button(label="+ Add Series", button_type="success", width=120, height=35)
+clear_series_button = Button(label="Clear All", button_type="warning", width=100, height=35)
 
 BTN_CSS = """
 :host .bk-btn { font-size: 0.9rem; font-family: Georgia, serif; border: none; border-radius: 5px;
@@ -902,6 +916,15 @@ switch_sheet = InlineStyleSheet(css=SWITCH_CSS)
 for b in (top15_button, download_top15_button, download_series_button):
     b.stylesheets = [btn_sheet]
 reset_button.stylesheets = [reset_sheet]
+
+# Style for smaller buttons
+SMALL_BTN_CSS = """
+:host .bk-btn { font-size: 0.85rem; font-family: Georgia, serif; border: none; border-radius: 5px;
+  background: #104b1f; color: white; height: 35px; margin: 0; padding: 0 10px; box-shadow: none; }
+"""
+small_btn_sheet = InlineStyleSheet(css=SMALL_BTN_CSS)
+add_series_button.stylesheets = [small_btn_sheet]
+clear_series_button.stylesheets = [small_btn_sheet]
 
 for w in (s_flow, s_product, s_product_cat, s_type,
           x_flow, x_product, x_product_cat, x_type, x_country_sel):
@@ -1253,6 +1276,90 @@ x_country_sel.on_change('value', lambda attr, old, new: update_series_view())
 # SA toggle callback
 x_sa_toggle.on_change('active', lambda attr, old, new: update_series_view())
 
+# Multi-series functions
+def add_series_to_chart():
+    """Add current selection as a new series to the chart"""
+    global multi_series_data
+
+    flow, country, product, product_cat, type_str = cur_series()
+
+    # Use SA unit if toggle is active
+    if x_sa_toggle.active:
+        type_str = f"{type_str}, SA"
+
+    # Create unique key for this series
+    series_key = (flow, country, product, product_cat, type_str)
+
+    # Check if already added
+    for item in multi_series_data:
+        if item['key'] == series_key:
+            return  # Already exists
+
+    # Get series data
+    series_data = get_data_for_series(flow, country, product, product_cat, type_str)
+    dates = series_data.index.to_list()
+    values = series_data.values.tolist()
+
+    if len(dates) == 0:
+        return  # No data
+
+    # Create new source and renderer
+    color_idx = len(multi_series_data) % len(SERIES_COLORS)
+    color = SERIES_COLORS[color_idx]
+
+    new_source = ColumnDataSource(data=dict(date=dates, value=values))
+    new_line = series_chart.line(x="date", y="value", source=new_source,
+                                  line_width=3, color=color)
+
+    # Create short label for legend
+    short_label = f"{country}, {product_cat}"
+    if x_sa_toggle.active:
+        short_label += " (SA)"
+
+    # Add to tracking list
+    multi_series_data.append({
+        'source': new_source,
+        'renderer': new_line,
+        'label': short_label,
+        'key': series_key,
+        'color': color
+    })
+
+    # Update legend
+    series_legend.items = [LegendItem(label=item['label'], renderers=[item['renderer']])
+                          for item in multi_series_data]
+
+    # Update range renderers to include all lines
+    series_xr.renderers = [item['renderer'] for item in multi_series_data]
+    series_yr.renderers = [item['renderer'] for item in multi_series_data]
+
+    # Update chart title
+    if len(multi_series_data) == 1:
+        series_chart.title.text = f"China, {flow}, {country}, {product}, {product_cat}, {type_str}"
+    else:
+        series_chart.title.text = f"Multiple Series ({len(multi_series_data)})"
+
+def clear_all_series():
+    """Remove all series from the chart"""
+    global multi_series_data
+
+    # Remove all renderers
+    for item in multi_series_data:
+        item['renderer'].visible = False
+
+    multi_series_data = []
+    series_legend.items = []
+
+    # Reset to single series mode
+    series_xr.renderers = [line_ts]
+    series_yr.renderers = [line_ts]
+
+    # Update view with current selection
+    update_series_view()
+
+add_series_button.on_click(add_series_to_chart)
+clear_series_button.on_click(clear_all_series)
+
 # Play/Pause
 ANIM_INTERVAL_MS = 600
 _pc_handle = {"id": None}
@@ -1397,7 +1504,9 @@ series_row.styles = {"align-items": "flex-start"}
 
 # Controls span full width - include SA toggle
 sa_toggle_group = row(x_sa_label, x_sa_toggle, spacing=5)
-series_controls = row(x_flow, x_country_sel, x_product, x_product_cat, x_type, Spacer(width=20), sa_toggle_group)
+# Series buttons group
+series_buttons_group = row(add_series_button, clear_series_button, spacing=5)
+series_controls = row(x_flow, x_country_sel, x_product, x_product_cat, x_type, Spacer(width=10), sa_toggle_group, Spacer(width=10), series_buttons_group)
 series_controls.width = series_row_total_w
 
 # Remove series_buttons row since button is now in series_right column
