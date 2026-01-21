@@ -399,7 +399,7 @@ def pick_default(options, preferred=None):
     return sorted(list(options))[0] if options else None
 
 default_flow = pick_default(flows, 'Exports')
-default_product = pick_default(products, 'Autos')
+default_product = pick_default(products, 'Total')
 default_product_cat = pick_default(product_cats, 'Total')
 default_type = pick_default(types_set, 'USD bn')
 
@@ -1253,7 +1253,7 @@ left_col = column(
     no_map_div,
     p,
     Div(
-        text="<i>Note: Map displays only trade flows ≥ $10M USD. Smaller values are excluded for performance.</i>",
+#        text="<i>Note: Map displays only trade flows ≥ $10M USD. Smaller values are excluded for performance.</i>",
         width=972,  # Match figure width
         styles={
             "font-family": "Georgia, serif",
