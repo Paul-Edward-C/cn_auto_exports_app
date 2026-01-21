@@ -1266,6 +1266,9 @@ def _rebuild_series_table():
         cols.append(TableColumn(field=safe_field, title=col, formatter=formatter, width=val_width))
     series_table.columns = cols
 
+    # Expand table width based on number of columns
+    series_table.width = date_width + (len(table_df.columns) * val_width)
+
 def update_series_view():
     flow, country, product, product_cat, type_str = cur_series()
 
@@ -1358,10 +1361,11 @@ def add_series_to_chart():
     new_line = series_chart.line(x="date", y="value", source=new_source,
                                   line_width=3, color=color)
 
-    # Create short label for legend (include flow)
-    short_label = f"{flow}, {country}, {product_cat}"
+    # Create label for legend (flow, country, product, category, unit, SA)
+    unit_display = type_str.replace(', SA', '')
+    short_label = f"{flow}, {country}, {product}, {product_cat}, {unit_display}"
     if x_sa_toggle.active:
-        short_label += " (SA)"
+        short_label += ", SA"
 
     # Add to tracking list
     multi_series_data.append({
