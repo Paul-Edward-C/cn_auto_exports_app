@@ -856,7 +856,7 @@ series_columns = [
 series_table = DataTable(
     source=series_table_source,
     columns=series_columns,
-    width=date_width + val_width,
+    width=500,  # Wider to accommodate multiple series
     height=320,
     index_position=None,
     header_row=True
@@ -1213,6 +1213,59 @@ def _update_sa_toggle_state():
             "padding-top": "6px"
         }
 
+def _rebuild_series_table():
+    """Rebuild table with current selection + all added series"""
+    flow, country, product, product_cat, type_str = cur_series()
+
+    # Use SA unit if toggle is active
+    if x_sa_toggle.active:
+        type_str = f"{type_str}, SA"
+
+    # Get current selection data
+    current_data = get_data_for_series(flow, country, product, product_cat, type_str)
+
+    # Build table data with all series
+    if len(current_data) == 0 and len(multi_series_data) == 0:
+        series_table_source.data = dict(date=[])
+        series_table.columns = [TableColumn(field="date", title="Date", width=date_width)]
+        return
+
+    # Create DataFrame with dates as index
+    dates = current_data.index if len(current_data) > 0 else DATE_LIST
+    table_df = pd.DataFrame(index=dates)
+
+    # Add current selection as first column
+    current_label = f"{flow}, {country}"
+    if x_sa_toggle.active:
+        current_label += " (SA)"
+    table_df[current_label] = current_data.values if len(current_data) > 0 else [np.nan] * len(dates)
+
+    # Add all added series
+    for item in multi_series_data:
+        src_data = item['source'].data
+        if len(src_data['date']) > 0:
+            series_df = pd.DataFrame({'value': src_data['value']}, index=pd.DatetimeIndex(src_data['date']))
+            table_df[item['label']] = series_df['value'].reindex(table_df.index)
+
+    # Take last 24 rows
+    table_df = table_df.tail(24)
+
+    # Build table data dict
+    table_data = {'date': [pd.Timestamp(d).strftime('%Y-%m-%d') for d in table_df.index]}
+    for col in table_df.columns:
+        # Create safe field name
+        safe_field = re.sub(r'[^a-zA-Z0-9_]', '_', col)
+        table_data[safe_field] = table_df[col].tolist()
+
+    series_table_source.data = table_data
+
+    # Build table columns
+    cols = [TableColumn(field="date", title="Date", width=date_width)]
+    for col in table_df.columns:
+        safe_field = re.sub(r'[^a-zA-Z0-9_]', '_', col)
+        cols.append(TableColumn(field=safe_field, title=col, formatter=formatter, width=val_width))
+    series_table.columns = cols
+
 def update_series_view():
     flow, country, product, product_cat, type_str = cur_series()
 
@@ -1235,22 +1288,8 @@ def update_series_view():
     series_source.data = dict(date=dates, value=values)
     series_chart.title.text = f"China, {flow}, {country}, {product}, {product_cat}, {display_unit}"
 
-    # Update table column header to indicate SA
-    value_title = "Value (SA)" if x_sa_toggle.active else "Value"
-    series_table.columns = [
-        TableColumn(field="date", title="Date", width=date_width),
-        TableColumn(field="value", title=value_title, formatter=formatter, width=val_width),
-    ]
-
-    if len(dates) > 0:
-        last = pd.DataFrame({"date": dates, "value": values}).tail(24)
-        series_table_source.data = dict(
-            index=list(range(len(last))),
-            date=[pd.Timestamp(d).strftime('%Y-%m-%d') for d in last["date"]],
-            value=last["value"].tolist()
-        )
-    else:
-        series_table_source.data = dict(index=[], date=[], value=[])
+    # Rebuild table with all series
+    _rebuild_series_table()
 
 # Callbacks
 def _refresh_snapshot_for_current_index(attr, old, new):
@@ -1319,8 +1358,8 @@ def add_series_to_chart():
     new_line = series_chart.line(x="date", y="value", source=new_source,
                                   line_width=3, color=color)
 
-    # Create short label for legend
-    short_label = f"{country}, {product_cat}"
+    # Create short label for legend (include flow)
+    short_label = f"{flow}, {country}, {product_cat}"
     if x_sa_toggle.active:
         short_label += " (SA)"
 
@@ -1341,6 +1380,9 @@ def add_series_to_chart():
     series_xr.renderers = [line_ts] + [item['renderer'] for item in multi_series_data]
     series_yr.renderers = [line_ts] + [item['renderer'] for item in multi_series_data]
 
+    # Rebuild table to include new series
+    _rebuild_series_table()
+
 def clear_all_series():
     """Remove all added series from the chart"""
     global multi_series_data
@@ -1355,6 +1397,9 @@ def clear_all_series():
     # Reset range renderers to just primary line
     series_xr.renderers = [line_ts]
     series_yr.renderers = [line_ts]
+
+    # Rebuild table with just current selection
+    _rebuild_series_table()
 
 add_series_button.on_click(add_series_to_chart)
 clear_series_button.on_click(clear_all_series)
