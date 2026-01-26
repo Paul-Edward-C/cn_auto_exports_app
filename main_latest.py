@@ -1209,7 +1209,7 @@ left_col = column(
     no_map_div,
     p,
     Div(
-        text="<i>Note: Map displays only trade flows ≥ $10M USD. Smaller values are excluded for performance.</i>",
+#        text="<i>Note: Map displays only trade flows ≥ $10M USD. Smaller values are excluded for performance.</i>",
         width=950,
         styles={
             "font-family": "Georgia, serif",
