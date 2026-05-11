@@ -496,35 +496,34 @@ def world_to_geojson(df_like):
     return json.dumps({"type": "FeatureCollection", "features": feats})
 
 def get_colors(export_values, palette, vmin, vmax, highlight_admins=None):
+    """Vectorised: return a numpy object array of hex colour strings, one per admin row."""
     arr = np.asarray(export_values, dtype=float)
-    mask = np.isfinite(arr)
     n = len(palette)
-    idx = np.zeros_like(arr, dtype=int)
+    palette_arr = np.asarray(palette, dtype=object)
+    mask = np.isfinite(arr)
+
     if vmax > vmin:
-        norm = (arr[mask] - vmin) / (vmax - vmin)
-        norm = np.clip(norm, 0.0, 1.0)
-        idx[mask] = np.round(norm * (n - 1)).astype(int)
-    colors = []
-    admins = filtered_world["ADMIN"].tolist()
-    for k, admin in enumerate(admins):
-        if not mask[k]:
-            colors.append("#dddddd")
-        elif highlight_admins is not None and admin not in highlight_admins:
-            colors.append("#dddddd")
-        else:
-            colors.append(palette[int(idx[k])])
-    return colors
+        norm = np.clip((arr - vmin) / (vmax - vmin), 0.0, 1.0)
+        idx = np.round(norm * (n - 1)).astype(int)
+    else:
+        idx = np.zeros_like(arr, dtype=int)
+    idx[~mask] = 0
+
+    out = np.where(mask, palette_arr[idx], "#dddddd")
+    if highlight_admins is not None:
+        admins_arr = filtered_world["ADMIN"].values
+        not_in = ~np.isin(admins_arr, list(highlight_admins))
+        out[not_in] = "#dddddd"
+    return out
 
 def _scale_values_for_map(flow, type_str):
-    vals = pd.to_numeric(filtered_world["exports"], errors="coerce")
-    if should_log(flow, type_str):
-        try:
-            minv = float(np.nanmin(vals.values))
-        except:
-            minv = np.nan
+    vals = pd.to_numeric(filtered_world["exports"], errors="coerce").to_numpy(dtype=float)
+    if should_log(flow, type_str) and np.isfinite(vals).any():
+        minv = np.nanmin(vals)
         if np.isfinite(minv) and minv >= 0:
-            return vals.apply(lambda x: np.log1p(x) if pd.notnull(x) else np.nan).astype(float)
-    return vals.astype(float)
+            # np.log1p propagates NaN; mask negatives just in case
+            return np.where(vals >= 0, np.log1p(np.clip(vals, 0, None)), np.nan)
+    return vals
 
 # Widgets
 s_flow = Select(title="Flow", value=default_flow, options=sorted(list(flows)), width=160)
@@ -687,6 +686,16 @@ for i, admin in enumerate(patches_data['ADMIN']):
     if admin not in admin_to_patch_idx:
         admin_to_patch_idx[admin] = []
     admin_to_patch_idx[admin].append(i)
+
+# Precomputed: for each patch (index in geo_source.data) → row index in filtered_world.
+# Lets us scatter per-admin arrays out to per-patch arrays via numpy fancy indexing.
+_admin_to_row = {a: r for r, a in enumerate(filtered_world['ADMIN'].values)}
+PATCH_ROW_IDX = np.array(
+    [_admin_to_row.get(a, -1) for a in patches_data['ADMIN']], dtype=np.int64
+)
+PATCH_VALID_MASK = PATCH_ROW_IDX >= 0
+PATCH_SAFE_IDX = np.where(PATCH_VALID_MASK, PATCH_ROW_IDX, 0)
+N_PATCHES = len(patches_data['ADMIN'])
 
 top15_table_source = ColumnDataSource(data=dict(country=[], v0=[], v1=[], v2=[]))
 top15_chart_source = ColumnDataSource(data=dict(country=[], value=[], color=[]))
@@ -1134,6 +1143,45 @@ def _apply_top15(mode: str, flow: str, product: str, product_cat: str, type_str:
 
     return set(admins)
 
+def _admin_values_from_snapshot(snapshot):
+    """Vectorise admin → df-country lookup for one snapshot dict."""
+    admins = filtered_world["ADMIN"].values
+    out = np.full(len(admins), np.nan, dtype=float)
+    for k, admin in enumerate(admins):
+        df_name = admin_to_df_map.get(admin)
+        if df_name is None:
+            continue
+        v = snapshot.get(df_name)
+        if v is None:
+            continue
+        out[k] = v
+    return out
+
+def _push_map_columns(exp_arr, exp_log_arr, notes_arr, colors_arr):
+    """Patch only the 4 changing columns of geo_source; xs/ys aren't re-emitted."""
+    # Scatter per-admin arrays into per-patch arrays via PATCH_SAFE_IDX
+    p_exp     = exp_arr[PATCH_SAFE_IDX]
+    p_exp_log = exp_log_arr[PATCH_SAFE_IDX]
+    p_notes   = notes_arr[PATCH_SAFE_IDX]
+    p_colors  = colors_arr[PATCH_SAFE_IDX]
+
+    # Invalid patches (admins not in filtered_world) get neutral defaults
+    p_exp     = np.where(PATCH_VALID_MASK, p_exp, np.nan)
+    p_exp_log = np.where(PATCH_VALID_MASK, p_exp_log, np.nan)
+    p_notes   = np.where(PATCH_VALID_MASK, p_notes, "")
+    p_colors  = np.where(PATCH_VALID_MASK, p_colors, "#dddddd")
+
+    # Bokeh expects None for missing numerics, not NaN
+    p_exp_list     = [None if np.isnan(v) else float(v) for v in p_exp]
+    p_exp_log_list = [None if np.isnan(v) else float(v) for v in p_exp_log]
+    full = slice(0, N_PATCHES)
+    geo_source.patch({
+        'exports':      [(full, p_exp_list)],
+        'exports_log':  [(full, p_exp_log_list)],
+        'note':         [(full, p_notes.tolist())],
+        'custom_color': [(full, p_colors.tolist())],
+    })
+
 def update_snapshot_by_index(i: int):
     i = int(np.clip(i, 0, len(DATE_LIST)-1))
     _set_slider_title(i)
@@ -1142,79 +1190,43 @@ def update_snapshot_by_index(i: int):
     row_date = pd.Timestamp(DATE_LIST[i]).strftime("%b %Y")
 
     country_exports = get_snapshot_for_date(flow, product, product_cat, type_str, i)
+    exp_arr = _admin_values_from_snapshot(country_exports)
+    filtered_world["exports"] = exp_arr
 
-    filtered_world["exports"] = filtered_world["ADMIN"].map(
-        lambda admin: country_exports.get(admin_to_df_map.get(admin), np.nan)
-    )
-
-    # 12-months-ago snapshot for YoY modes
+    # 12-months-ago snapshot for YoY modes (only fetched when needed)
     if i >= 12:
         country_exports_past = get_snapshot_for_date(flow, product, product_cat, type_str, i - 12)
-        filtered_world["exports_past"] = filtered_world["ADMIN"].map(
-            lambda admin: country_exports_past.get(admin_to_df_map.get(admin), np.nan)
-        )
+        past_arr = _admin_values_from_snapshot(country_exports_past)
     else:
-        filtered_world["exports_past"] = np.nan
+        past_arr = np.full(len(filtered_world), np.nan)
+    filtered_world["exports_past"] = past_arr
 
-    world_only_now = filtered_world["exports"].notna().sum() == 0
-    
-    # Keep map always visible - just show message div when no data
-    # p.visible = not world_only_now  # REMOVED - map stays visible
+    world_only_now = bool(np.isfinite(exp_arr).sum() == 0)
     top15_chart.visible = not world_only_now
     no_map_div.visible = world_only_now
     if world_only_now:
         no_map_div.text = f"<i>No country breakdown for this selection on {row_date}. See series below.</i>"
 
-    filtered_world["exports_log"] = _scale_values_for_map(flow, type_str)
-    exports_log = filtered_world["exports_log"].astype(float).values
-    if np.isfinite(exports_log).any():
-        vmin = float(np.nanmin(exports_log)); vmax = float(np.nanmax(exports_log))
+    exp_log_arr = _scale_values_for_map(flow, type_str)
+    filtered_world["exports_log"] = exp_log_arr
+
+    if np.isfinite(exp_log_arr).any():
+        vmin = float(np.nanmin(exp_log_arr)); vmax = float(np.nanmax(exp_log_arr))
         if not np.isfinite(vmin): vmin = 0.0
         if not np.isfinite(vmax): vmax = 1.0
         if vmax == vmin: vmax = vmin + 1.0
     else:
         vmin, vmax = 0.0, 1.0
 
-    filtered_world["note"] = filtered_world["exports"].apply(lambda x: "No Data" if pd.isnull(x) else "")
-    filtered_world.loc[filtered_world["ADMIN"] == "China", "note"] = "Exporter (no data)"
-    filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
+    notes_arr = np.where(np.isnan(exp_arr), "No Data", "")
+    china_mask = (filtered_world["ADMIN"].values == "China")
+    notes_arr = np.where(china_mask, "Exporter (no data)", notes_arr)
+    filtered_world["note"] = notes_arr
 
-    # OPTIMIZATION: Update only the data fields, not geometry
-    # Build value lookup
-    value_lookup = {}
-    for idx, data_row in filtered_world.iterrows():
-        admin = data_row['ADMIN']
-        value_lookup[admin] = {
-            'exports': None if pd.isna(data_row['exports']) else float(data_row['exports']),
-            'exports_log': None if pd.isna(data_row['exports_log']) else float(data_row['exports_log']),
-            'note': data_row['note'],
-            'custom_color': data_row['custom_color']
-        }
-    
-    # Update patches data
-    current_data = dict(geo_source.data)  # Get current data as dict
-    # Create new lists for fields that will change
-    new_exports = list(current_data['exports'])
-    new_exports_log = list(current_data['exports_log'])
-    new_notes = list(current_data['note'])
-    new_colors = list(current_data['custom_color'])
-    
-    for i in range(len(current_data['ADMIN'])):
-        admin = current_data['ADMIN'][i]
-        if admin in value_lookup:
-            new_exports[i] = value_lookup[admin]['exports']
-            new_exports_log[i] = value_lookup[admin]['exports_log']
-            new_notes[i] = value_lookup[admin]['note']
-            new_colors[i] = value_lookup[admin]['custom_color']
-    
-    # Assign updated lists
-    current_data['exports'] = new_exports
-    current_data['exports_log'] = new_exports_log
-    current_data['note'] = new_notes
-    current_data['custom_color'] = new_colors
-    
-    # Trigger update
-    geo_source.data = current_data
+    colors_arr = get_colors(exp_log_arr, smooth_palette, vmin, vmax)
+    filtered_world["custom_color"] = colors_arr
+
+    _push_map_columns(exp_arr, exp_log_arr, notes_arr, colors_arr)
 
     p.title.text = f"China, {flow}, {product}, {product_cat}, {type_str}, {row_date}"
     color_mapper_obj.low = vmin
@@ -1228,35 +1240,29 @@ def update_snapshot_by_index(i: int):
     if not world_only_now:
         _apply_top15(top15_mode_sel.value, flow, product, product_cat, type_str, row_date)
 
+def _push_map_colors_only(colors_arr):
+    """Patch only the custom_color column."""
+    p_colors = colors_arr[PATCH_SAFE_IDX]
+    p_colors = np.where(PATCH_VALID_MASK, p_colors, "#dddddd")
+    geo_source.patch({
+        'custom_color': [(slice(0, N_PATCHES), p_colors.tolist())],
+    })
+
 def reset_top15():
     flow, product, product_cat, type_str = cur_snap()
-    filtered_world["exports_log"] = _scale_values_for_map(flow, type_str)
-    exports_log = filtered_world["exports_log"].astype(float).values
-    if np.isfinite(exports_log).any():
-        vmin = float(np.nanmin(exports_log)); vmax = float(np.nanmax(exports_log))
+    exp_log_arr = _scale_values_for_map(flow, type_str)
+    filtered_world["exports_log"] = exp_log_arr
+    if np.isfinite(exp_log_arr).any():
+        vmin = float(np.nanmin(exp_log_arr)); vmax = float(np.nanmax(exp_log_arr))
         if not np.isfinite(vmin): vmin = 0.0
         if not np.isfinite(vmax): vmax = 1.0
         if vmax == vmin: vmax = vmin + 1.0
     else:
         vmin, vmax = 0.0, 1.0
-    filtered_world["custom_color"] = get_colors(exports_log, smooth_palette, vmin, vmax)
-    
-    # OPTIMIZATION: Update only colors
-    value_lookup = {}
-    for idx, data_row in filtered_world.iterrows():
-        value_lookup[data_row['ADMIN']] = data_row['custom_color']
-    
-    current_data = dict(geo_source.data)  # Convert to plain dict
-    new_colors = list(current_data['custom_color'])
-    
-    for i in range(len(current_data['ADMIN'])):
-        admin = current_data['ADMIN'][i]
-        if admin in value_lookup:
-            new_colors[i] = value_lookup[admin]
-    
-    current_data['custom_color'] = new_colors
-    geo_source.data = current_data
-    
+    colors_arr = get_colors(exp_log_arr, smooth_palette, vmin, vmax)
+    filtered_world["custom_color"] = colors_arr
+    _push_map_colors_only(colors_arr)
+
     top15_table_source.data = dict(country=[], v0=[], v1=[], v2=[])
     top15_chart_source.data = dict(country=[], value=[], color=[])
     top15_chart.x_range.factors = []
@@ -1281,35 +1287,24 @@ def highlight_top15():
         return
 
     admins_arr = filtered_world["ADMIN"].values
-    in_top = np.array([a in top_admin_set for a in admins_arr])
+    in_top = np.isin(admins_arr, list(top_admin_set))
     valid_in_top = in_top & np.isfinite(exports_log)
 
-    colors = np.full(filtered_world.shape[0], "#dddddd", dtype=object)
+    colors_arr = np.full(filtered_world.shape[0], "#dddddd", dtype=object)
     if valid_in_top.any():
         vals = exports_log[valid_in_top]
         vmin = float(np.nanmin(vals)); vmax = float(np.nanmax(vals))
         if not np.isfinite(vmin): vmin = 0.0
         if not np.isfinite(vmax): vmax = 1.0
         if vmax == vmin: vmax = vmin + 1.0
-        for ci in np.where(valid_in_top)[0]:
-            norm = (exports_log[ci] - vmin) / (vmax - vmin)
-            pal_idx = int(round(float(np.clip(norm, 0, 1)) * (len(smooth_palette) - 1)))
-            colors[ci] = smooth_palette[pal_idx]
-    filtered_world["custom_color"] = colors
-
-    # Push only the colour column to the map
-    value_lookup = {}
-    for _, data_row in filtered_world.iterrows():
-        value_lookup[data_row['ADMIN']] = data_row['custom_color']
-
-    current_data = dict(geo_source.data)
-    new_colors = list(current_data['custom_color'])
-    for k in range(len(current_data['ADMIN'])):
-        admin = current_data['ADMIN'][k]
-        if admin in value_lookup:
-            new_colors[k] = value_lookup[admin]
-    current_data['custom_color'] = new_colors
-    geo_source.data = current_data
+        norm = np.clip((exports_log - vmin) / (vmax - vmin), 0.0, 1.0)
+        idx = np.round(norm * (len(smooth_palette) - 1)).astype(int)
+        idx[~valid_in_top] = 0
+        palette_arr = np.asarray(smooth_palette, dtype=object)
+        chosen = palette_arr[idx]
+        colors_arr = np.where(valid_in_top, chosen, "#dddddd")
+    filtered_world["custom_color"] = colors_arr
+    _push_map_colors_only(colors_arr)
 
 # Series explorer
 def _update_series_country_options():
@@ -1430,16 +1425,19 @@ def update_series_view():
 def _refresh_snapshot_for_current_index(attr, old, new):
     update_snapshot_by_index(int(month_slider.value))
 
-for w in (s_flow, s_product, s_product_cat, s_type):
-    w.on_change('value', _refresh_snapshot_for_current_index)
-
-def _on_snapshot_product_change(attr, old, new):
+def _on_snapshot_master_change(attr, old, new):
+    # When flow/product/unit changes, the category list may need updating.
+    # If that update changes s_product_cat.value, the cat callback already refreshes —
+    # so we only refresh manually when the cat value was unchanged.
+    old_cat = s_product_cat.value
     _update_snapshot_category_options()
-    _refresh_snapshot_for_current_index(attr, old, new)
+    if s_product_cat.value == old_cat:
+        _refresh_snapshot_for_current_index(attr, old, new)
 
-s_product.on_change('value', _on_snapshot_product_change)
-s_flow.on_change('value', lambda a, o, n: _on_snapshot_product_change(a, o, n))
-s_type.on_change('value', lambda a, o, n: _on_snapshot_product_change(a, o, n))
+s_flow.on_change('value', _on_snapshot_master_change)
+s_product.on_change('value', _on_snapshot_master_change)
+s_type.on_change('value', _on_snapshot_master_change)
+s_product_cat.on_change('value', _refresh_snapshot_for_current_index)
 
 top15_button.on_click(highlight_top15)
 reset_button.on_click(reset_top15)
