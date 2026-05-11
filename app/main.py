@@ -152,60 +152,62 @@ if USE_OPTIMIZED:
         key = (data_row['flow'], data_row['country'], data_row['product'], data_row['product_cat'], data_row['unit'])
         key_to_col[key] = data_row['column']
     
-    # On-demand data loading
-    @lru_cache(maxsize=100)
+    # Load the entire normalized parquet ONCE, pivot per (flow, product, product_cat, unit)
+    # into wide DataFrames keyed by date × country. This replaces per-call pd.read_parquet
+    # so every snapshot / series fetch is an in-memory slice.
+    print("[CACHE] Loading full normalized parquet into memory...")
+    _t0 = pd.Timestamp.now()
+    _long_df = pd.read_parquet(OPTIMIZED_DIR / "data_normalized.parquet")
+    _long_df['date'] = pd.to_datetime(_long_df['date'])
+    print(f"[CACHE] Long format loaded: {len(_long_df):,} rows in "
+          f"{(pd.Timestamp.now() - _t0).total_seconds():.2f}s")
+
+    DATE_INDEX = pd.DatetimeIndex([pd.Timestamp(d) for d in DATE_LIST])
+
+    print("[CACHE] Pivoting to wide format per combo + pre-computing YoY...")
+    _t0 = pd.Timestamp.now()
+    WIDE: dict = {}
+    WIDE_YOY: dict = {}
+    WIDE_YOY_PCT: dict = {}
+    for (flow, prod, cat, unit), group in _long_df.groupby(
+        ['flow', 'product', 'product_cat', 'unit'], sort=False
+    ):
+        wide = group.pivot_table(index='date', columns='country', values='value', aggfunc='first')
+        wide = wide.reindex(DATE_INDEX)
+        key = (flow, prod, cat, unit)
+        WIDE[key] = wide
+        past = wide.shift(12)
+        WIDE_YOY[key] = wide - past
+        with np.errstate(divide='ignore', invalid='ignore'):
+            yoy_pct = (wide - past) / past.abs() * 100.0
+        WIDE_YOY_PCT[key] = yoy_pct.replace([np.inf, -np.inf], np.nan)
+    # Free the long table — wide tables hold everything we need
+    del _long_df
+    print(f"[CACHE] Pivoted {len(WIDE)} combos in "
+          f"{(pd.Timestamp.now() - _t0).total_seconds():.2f}s")
+
+    _empty_series = pd.Series([np.nan] * len(DATE_LIST), index=DATE_INDEX)
+
     def get_data_for_series(flow, country, product, product_cat, unit):
-        """Load specific time series on-demand"""
-        filters = [
-            ('flow', '=', flow),
-            ('country', '=', country),
-            ('product', '=', product),
-            ('product_cat', '=', product_cat),
-            ('unit', '=', unit)
-        ]
-        try:
-            data = pd.read_parquet(
-                OPTIMIZED_DIR / "data_normalized.parquet",
-                filters=filters,
-                columns=['date', 'value']
-            )
-            # Create series aligned with DATE_LIST
-            result = pd_Series(index=pd.DatetimeIndex(DATE_LIST), dtype=float)
-            for _, data_row in data.iterrows():
-                if pd.Timestamp(data_row['date']) in result.index:
-                    result[pd.Timestamp(data_row['date'])] = data_row['value']
-            return result
-        except:
-            return pd.Series([np.nan] * len(DATE_LIST), index=pd.DatetimeIndex(DATE_LIST))
-    
-    @lru_cache(maxsize=100)
+        wide = WIDE.get((flow, product, product_cat, unit))
+        if wide is None or country not in wide.columns:
+            return _empty_series.copy()
+        return wide[country].copy()
+
     def get_snapshot_for_date(flow, product, product_cat, unit, date_idx):
-        """Load all countries for specific combo and date"""
-        if date_idx >= len(DATE_LIST):
+        wide = WIDE.get((flow, product, product_cat, unit))
+        if wide is None or date_idx < 0 or date_idx >= len(DATE_LIST):
             return {}
-        
-        target_date = DATE_LIST[date_idx]
-        filters = [
-            ('flow', '=', flow),
-            ('product', '=', product),
-            ('product_cat', '=', product_cat),
-            ('unit', '=', unit)
-        ]
-        try:
-            data = pd.read_parquet(
-                OPTIMIZED_DIR / "data_normalized.parquet",
-                filters=filters,
-                columns=['date', 'country', 'value']
-            )
-            # Find closest date
-            data['date'] = pd.to_datetime(data['date'])
-            date_mask = (data['date'] >= target_date) & (data['date'] < target_date + pd.Timedelta(days=32))
-            snapshot = data[date_mask].groupby('country')['value'].last()
-            return snapshot.to_dict()
-        except Exception as e:
-            print(f"[ERROR] Snapshot load: {e}")
+        return wide.iloc[date_idx].dropna().to_dict()
+
+    def get_yoy_snapshot_for_date(flow, product, product_cat, unit, date_idx, pct=False):
+        """Pre-baked YoY snapshot. pct=False → absolute change; pct=True → YoY %."""
+        store = WIDE_YOY_PCT if pct else WIDE_YOY
+        wide = store.get((flow, product, product_cat, unit))
+        if wide is None or date_idx < 12 or date_idx >= len(DATE_LIST):
             return {}
-    
+        return wide.iloc[date_idx].dropna().to_dict()
+
     print(f"[BOOT] Schema: {len(flows)} flows, {len(countries)} countries, {len(products)} products")
 
 else:
@@ -686,7 +688,7 @@ for i, admin in enumerate(patches_data['ADMIN']):
         admin_to_patch_idx[admin] = []
     admin_to_patch_idx[admin].append(i)
 
-top15_table_source = ColumnDataSource(data=dict(country=[], value=[]))
+top15_table_source = ColumnDataSource(data=dict(country=[], v0=[], v1=[], v2=[]))
 top15_chart_source = ColumnDataSource(data=dict(country=[], value=[], color=[]))
 
 # Top 15 mode + bar colors
@@ -1060,20 +1062,71 @@ def _compute_top15_by_mode(mode: str):
     colors = [POS_BAR_COLOR if v >= 0 else NEG_BAR_COLOR for v in values]
     return admins, values, colors
 
+def _value_for_admin(snap_now, snap_past, admin, mode):
+    """Compute the metric value for one admin given current and (optional) past snapshots."""
+    df_name = admin_to_df_map.get(admin)
+    if df_name is None:
+        return None
+    n = snap_now.get(df_name) if snap_now is not None else None
+    if n is None or (isinstance(n, float) and np.isnan(n)):
+        n = None
+    if mode == "Level":
+        return float(n) if n is not None else None
+    if snap_past is None:
+        return None
+    p = snap_past.get(df_name)
+    if p is None or (isinstance(p, float) and np.isnan(p)):
+        return None
+    if n is None:
+        return None
+    if mode == "YoY contribution":
+        return float(n) - float(p)
+    # YoY %
+    if p == 0:
+        return None
+    return (float(n) - float(p)) / abs(float(p)) * 100.0
+
+def _three_month_values(mode, admins, flow, product, product_cat, type_str, i):
+    """Return (v0_list, v1_list, v2_list) aligned with admins, where v0 is at index i, v1 at i-1, v2 at i-2."""
+    cols = [[None] * len(admins) for _ in range(3)]
+    for offset in range(3):
+        idx = i - offset
+        if idx < 0:
+            continue
+        snap_now = get_snapshot_for_date(flow, product, product_cat, type_str, idx)
+        snap_past = None
+        if mode in ("YoY contribution", "YoY %"):
+            if idx < 12:
+                continue
+            snap_past = get_snapshot_for_date(flow, product, product_cat, type_str, idx - 12)
+        for k, admin in enumerate(admins):
+            cols[offset][k] = _value_for_admin(snap_now, snap_past, admin, mode)
+    return cols[0], cols[1], cols[2]
+
 def _apply_top15(mode: str, flow: str, product: str, product_cat: str, type_str: str, row_date: str):
     """Populate the Top 15 chart and table for the given mode. Returns the set of admin names shown."""
     admins, values, colors = _compute_top15_by_mode(mode)
     labels = pd.Series(admins).replace(TERMS_DICT).tolist() if admins else []
 
-    top15_table_source.data = dict(country=labels, value=values)
+    i = int(month_slider.value)
+    v0, v1, v2 = _three_month_values(mode, admins, flow, product, product_cat, type_str, i)
+
+    top15_table_source.data = dict(country=labels, v0=v0, v1=v1, v2=v2)
     top15_chart_source.data = dict(country=labels, value=values, color=colors)
     top15_chart.x_range.factors = labels
+
+    def _label(offset):
+        idx = i - offset
+        return DATE_LABELS[idx] if 0 <= idx < len(DATE_LABELS) else ""
+    top15_col_v0.title = _label(0)
+    top15_col_v1.title = _label(1)
+    top15_col_v2.title = _label(2)
 
     if mode == "Level":
         top15_chart.title.text = f"{flow}, {product}, {product_cat}, {type_str}, {row_date}"
         top15_zero_span.visible = False
     elif mode == "YoY contribution":
-        top15_chart.title.text = f"YoY chg: {flow}, {product}, {product_cat}, {type_str}, {row_date}"
+        top15_chart.title.text = f"Cntrn to YoY chg: {flow}, {product}, {product_cat}, {type_str}, {row_date}"
         top15_zero_span.visible = True
     else:  # YoY %
         top15_chart.title.text = f"YoY %: {flow}, {product}, {product_cat}, {row_date}"
@@ -1168,7 +1221,7 @@ def update_snapshot_by_index(i: int):
     color_mapper_obj.high = vmax
     color_bar.title = f"{flow}, {product}, {product_cat}, {type_str}"
 
-    top15_table_source.data = dict(country=[], value=[])
+    top15_table_source.data = dict(country=[], v0=[], v1=[], v2=[])
     top15_chart_source.data = dict(country=[], value=[], color=[])
     top15_chart.x_range.factors = []
     top15_zero_span.visible = False
@@ -1204,7 +1257,7 @@ def reset_top15():
     current_data['custom_color'] = new_colors
     geo_source.data = current_data
     
-    top15_table_source.data = dict(country=[], value=[])
+    top15_table_source.data = dict(country=[], v0=[], v1=[], v2=[])
     top15_chart_source.data = dict(country=[], value=[], color=[])
     top15_chart.x_range.factors = []
     top15_zero_span.visible = False
@@ -1549,11 +1602,17 @@ TOP15_ROWS_VISIBLE = 15
 TOP15_ROW_HEIGHT = 26
 TOP15_TABLE_HEIGHT = TOP15_ROWS_VISIBLE * TOP15_ROW_HEIGHT + 48
 
+top15_col_v0 = TableColumn(field="v0", title="", formatter=formatter, width=80)
+top15_col_v1 = TableColumn(field="v1", title="", formatter=formatter, width=80)
+top15_col_v2 = TableColumn(field="v2", title="", formatter=formatter, width=80)
+
 top15_table = DataTable(
     source=top15_table_source,
     columns=[
-        TableColumn(field="country", title="Country", width=200),
-        TableColumn(field="value", title="Value", formatter=formatter, width=150),
+        TableColumn(field="country", title="Country", width=130),
+        top15_col_v0,
+        top15_col_v1,
+        top15_col_v2,
     ],
     width=370,
     row_height=TOP15_ROW_HEIGHT,
@@ -1784,9 +1843,30 @@ download_series_button.js_on_click(CustomJS(
     code=_csv_js
 ))
 
+_csv_js_top15 = """
+const headerMap = {country: "Country", v0: col_v0.title, v1: col_v1.title, v2: col_v2.title};
+const data = source.data;
+const cols = Object.keys(data);
+const pretty = cols.map(c => headerMap[c] || c.replace(/_/g," "));
+const nrows = data[cols[0]].length;
+const lines = [pretty.join(",")];
+for (let i = 0; i < nrows; i++) {
+  lines.push(cols.map(col => (data[col][i] == null ? "" : `"${data[col][i]}"`)).join(","));
+}
+const csv = lines.join("\\n");
+const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+const link = document.createElement("a");
+link.href = URL.createObjectURL(blob);
+link.download = filename;
+document.body.appendChild(link);
+link.click();
+document.body.removeChild(link);
+"""
+
 download_top15_button.js_on_click(CustomJS(
-    args=dict(source=top15_table_source, filename="top15.csv"),
-    code=_csv_js
+    args=dict(source=top15_table_source, filename="top15.csv",
+              col_v0=top15_col_v0, col_v1=top15_col_v1, col_v2=top15_col_v2),
+    code=_csv_js_top15
 ))
 
 print("[BOOT] ===== INITIALIZATION COMPLETE =====")
