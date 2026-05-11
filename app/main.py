@@ -687,7 +687,20 @@ for i, admin in enumerate(patches_data['ADMIN']):
     admin_to_patch_idx[admin].append(i)
 
 top15_table_source = ColumnDataSource(data=dict(country=[], value=[]))
-top15_chart_source = ColumnDataSource(data=dict(country=[], value=[]))
+top15_chart_source = ColumnDataSource(data=dict(country=[], value=[], color=[]))
+
+# Top 15 mode + bar colors
+LEVEL_BAR_COLOR = "#556B2F"
+POS_BAR_COLOR   = "#2e7d32"
+NEG_BAR_COLOR   = "#c62828"
+TOP15_POS_N     = 10
+TOP15_NEG_N     = 5
+TERMS_DICT = {
+    "United States of America": "US",
+    "United Arab Emirates": "UAE",
+    "United Kingdom": "UK",
+    "Hong Kong S.A.R": "Hong Kong",
+}
 
 series_source = ColumnDataSource(data=dict(date=[], value=[]))
 series_table_source = ColumnDataSource(data=dict(index=[], date=[], value=[]))
@@ -766,10 +779,16 @@ top15_chart = figure(
     title=f"{default_flow}, {default_product}, {default_product_cat}, {default_type}, {latest_label}",
     toolbar_location=None, tools="", min_border_left=10, min_border_right=10, min_border_top=10, min_border_bottom=10
 )
-top15_chart.vbar(x="country", top="value", source=top15_chart_source, width=0.7, color="#556B2F", alpha=0.7)
+top15_chart.vbar(x="country", top="value", source=top15_chart_source, width=0.7,
+                 fill_color="color", line_color="color", alpha=0.7)
 top15_chart.xaxis.major_label_orientation = 1.0
 top15_chart.xgrid.grid_line_color = None
 top15_chart.title.text_font_size = "14px"
+
+# Zero reference line (visible only in YoY modes)
+top15_zero_span = Span(location=0, dimension='width', line_color='#999999',
+                       line_dash='solid', line_width=1, visible=False)
+top15_chart.add_layout(top15_zero_span)
 
 # Series line chart
 series_xr = DataRange1d(only_visible=True, range_padding=0.02)
@@ -867,6 +886,13 @@ reset_button = Button(label="🔄", button_type="default", width=40, height=35)
 download_series_button = Button(label="Download Series CSV", button_type="primary", width=220, height=35)
 download_top15_button = Button(label="Download Top 15 CSV", button_type="primary", width=220, height=35)
 
+top15_mode_sel = Select(
+    title="Top 15 by",
+    value="Level",
+    options=["Level", "YoY contribution", "YoY %"],
+    width=200,
+)
+
 # Multi-series buttons
 add_series_button = Button(label="+ Add Series", button_type="success", width=120, height=35)
 clear_series_button = Button(label="Clear All", button_type="warning", width=100, height=35)
@@ -935,7 +961,8 @@ add_series_button.stylesheets = [small_btn_sheet]
 clear_series_button.stylesheets = [small_btn_sheet]
 
 for w in (s_flow, s_product, s_product_cat, s_type,
-          x_flow, x_product, x_product_cat, x_type, x_country_sel):
+          x_flow, x_product, x_product_cat, x_type, x_country_sel,
+          top15_mode_sel):
     w.stylesheets = [selects_sheet]
 
 x_sa_toggle.stylesheets = [switch_sheet]
@@ -991,6 +1018,69 @@ def _set_slider_title(i: int):
     if 0 <= i < len(DATE_LABELS):
         month_slider.title = f"Month — {DATE_LABELS[i]}"
 
+def _compute_top15_by_mode(mode: str):
+    """Return (admins, values, colors) for the Top 15 according to mode.
+
+    Reads filtered_world['exports'] (current) and filtered_world['exports_past'] (12m ago).
+    Level: top 15 by value descending.
+    YoY contribution / YoY %: top 10 positives + bottom 5 negatives, signed.
+    """
+    df = filtered_world
+    if mode == "Level":
+        s = pd.Series(df['exports'].values, index=df['ADMIN'])
+        s = s[~s.index.duplicated(keep='first')].dropna()
+        s = s.sort_values(ascending=False).head(15)
+        return s.index.tolist(), s.values.tolist(), [LEVEL_BAR_COLOR] * len(s)
+
+    if 'exports_past' not in df.columns:
+        return [], [], []
+
+    now  = pd.Series(df['exports'].values, index=df['ADMIN'])
+    past = pd.Series(df['exports_past'].values, index=df['ADMIN'])
+    now  = now[~now.index.duplicated(keep='first')]
+    past = past[~past.index.duplicated(keep='first')]
+
+    if mode == "YoY contribution":
+        change = (now - past).dropna()
+    elif mode == "YoY %":
+        valid = (past.abs() > 0) & now.notna()
+        change = ((now[valid] - past[valid]) / past[valid].abs() * 100.0)
+        change = change.replace([np.inf, -np.inf], np.nan).dropna()
+    else:
+        return [], [], []
+
+    if change.empty:
+        return [], [], []
+
+    pos = change[change > 0].sort_values(ascending=False).head(TOP15_POS_N)
+    neg = change[change < 0].sort_values(ascending=True).head(TOP15_NEG_N)
+    combined = pd.concat([pos, neg])
+    admins = combined.index.tolist()
+    values = combined.values.tolist()
+    colors = [POS_BAR_COLOR if v >= 0 else NEG_BAR_COLOR for v in values]
+    return admins, values, colors
+
+def _apply_top15(mode: str, flow: str, product: str, product_cat: str, type_str: str, row_date: str):
+    """Populate the Top 15 chart and table for the given mode. Returns the set of admin names shown."""
+    admins, values, colors = _compute_top15_by_mode(mode)
+    labels = pd.Series(admins).replace(TERMS_DICT).tolist() if admins else []
+
+    top15_table_source.data = dict(country=labels, value=values)
+    top15_chart_source.data = dict(country=labels, value=values, color=colors)
+    top15_chart.x_range.factors = labels
+
+    if mode == "Level":
+        top15_chart.title.text = f"{flow}, {product}, {product_cat}, {type_str}, {row_date}"
+        top15_zero_span.visible = False
+    elif mode == "YoY contribution":
+        top15_chart.title.text = f"YoY chg: {flow}, {product}, {product_cat}, {type_str}, {row_date}"
+        top15_zero_span.visible = True
+    else:  # YoY %
+        top15_chart.title.text = f"YoY %: {flow}, {product}, {product_cat}, {row_date}"
+        top15_zero_span.visible = True
+
+    return set(admins)
+
 def update_snapshot_by_index(i: int):
     i = int(np.clip(i, 0, len(DATE_LIST)-1))
     _set_slider_title(i)
@@ -999,10 +1089,19 @@ def update_snapshot_by_index(i: int):
     row_date = pd.Timestamp(DATE_LIST[i]).strftime("%b %Y")
 
     country_exports = get_snapshot_for_date(flow, product, product_cat, type_str, i)
-    
+
     filtered_world["exports"] = filtered_world["ADMIN"].map(
         lambda admin: country_exports.get(admin_to_df_map.get(admin), np.nan)
     )
+
+    # 12-months-ago snapshot for YoY modes
+    if i >= 12:
+        country_exports_past = get_snapshot_for_date(flow, product, product_cat, type_str, i - 12)
+        filtered_world["exports_past"] = filtered_world["ADMIN"].map(
+            lambda admin: country_exports_past.get(admin_to_df_map.get(admin), np.nan)
+        )
+    else:
+        filtered_world["exports_past"] = np.nan
 
     world_only_now = filtered_world["exports"].notna().sum() == 0
     
@@ -1070,23 +1169,11 @@ def update_snapshot_by_index(i: int):
     color_bar.title = f"{flow}, {product}, {product_cat}, {type_str}"
 
     top15_table_source.data = dict(country=[], value=[])
-    top15_chart_source.data = dict(country=[], value=[])
+    top15_chart_source.data = dict(country=[], value=[], color=[])
     top15_chart.x_range.factors = []
+    top15_zero_span.visible = False
     if not world_only_now:
-        top = (filtered_world[['ADMIN','exports']].dropna()
-            .sort_values('exports', ascending=False).head(15))
-        terms_dict = {
-            "United States of America": "US",
-            "United Arab Emirates": "UAE",
-            "United Kingdom": "UK",
-            "Hong Kong S.A.R": 'Hong Kong'
-        }
-        labels = top['ADMIN'].replace(terms_dict)
-
-        top15_table_source.data = dict(country=labels.tolist(), value=top['exports'].tolist())
-        top15_chart_source.data = dict(country=labels.tolist(), value=top['exports'].tolist())
-        top15_chart.x_range.factors = labels.tolist()
-        top15_chart.title.text = f"{flow}, {product}, {product_cat}, {type_str}, {row_date}"
+        _apply_top15(top15_mode_sel.value, flow, product, product_cat, type_str, row_date)
 
 def reset_top15():
     flow, product, product_cat, type_str = cur_snap()
@@ -1118,66 +1205,58 @@ def reset_top15():
     geo_source.data = current_data
     
     top15_table_source.data = dict(country=[], value=[])
-    top15_chart_source.data = dict(country=[], value=[])
+    top15_chart_source.data = dict(country=[], value=[], color=[])
     top15_chart.x_range.factors = []
+    top15_zero_span.visible = False
 
 def highlight_top15():
     flow, product, product_cat, type_str = cur_snap()
     if is_world_only(flow, product, product_cat, type_str):
         return
+
+    i = int(month_slider.value)
+    row_date = pd.Timestamp(DATE_LIST[i]).strftime("%b %Y")
+
+    # Refresh log-scaled values used for the map colour scale (always level-based)
     filtered_world["exports_log"] = _scale_values_for_map(flow, type_str)
     exports_log = filtered_world["exports_log"].astype(float).values
-    valid_idx = np.where(np.isfinite(exports_log))[0]
-    if len(valid_idx) == 0:
+
+    # Compute the Top 15 set for the currently selected mode (also fills chart + table)
+    mode = top15_mode_sel.value
+    top_admin_set = _apply_top15(mode, flow, product, product_cat, type_str, row_date)
+    if not top_admin_set:
         return
-    if len(valid_idx) > 15:
-        top15_idx = valid_idx[np.argpartition(-exports_log[valid_idx], 15)[:15]]
-    else:
-        top15_idx = valid_idx
+
+    admins_arr = filtered_world["ADMIN"].values
+    in_top = np.array([a in top_admin_set for a in admins_arr])
+    valid_in_top = in_top & np.isfinite(exports_log)
 
     colors = np.full(filtered_world.shape[0], "#dddddd", dtype=object)
-    vmin = float(np.nanmin(exports_log[top15_idx])); vmax = float(np.nanmax(exports_log[top15_idx]))
-    if not np.isfinite(vmin): vmin = 0.0
-    if not np.isfinite(vmax): vmax = 1.0
-    if vmax == vmin:
-        idx = np.zeros(len(top15_idx), dtype=int)
-    else:
-        norm = (exports_log[top15_idx] - vmin) / (vmax - vmin)
-        idx = (np.clip(norm, 0, 1) * (len(smooth_palette) - 1)).round().astype(int)
-    for i, ci in enumerate(top15_idx):
-        colors[ci] = smooth_palette[int(idx[i])]
+    if valid_in_top.any():
+        vals = exports_log[valid_in_top]
+        vmin = float(np.nanmin(vals)); vmax = float(np.nanmax(vals))
+        if not np.isfinite(vmin): vmin = 0.0
+        if not np.isfinite(vmax): vmax = 1.0
+        if vmax == vmin: vmax = vmin + 1.0
+        for ci in np.where(valid_in_top)[0]:
+            norm = (exports_log[ci] - vmin) / (vmax - vmin)
+            pal_idx = int(round(float(np.clip(norm, 0, 1)) * (len(smooth_palette) - 1)))
+            colors[ci] = smooth_palette[pal_idx]
     filtered_world["custom_color"] = colors
-    
-    # OPTIMIZATION: Update only colors
+
+    # Push only the colour column to the map
     value_lookup = {}
-    for idx, data_row in filtered_world.iterrows():
+    for _, data_row in filtered_world.iterrows():
         value_lookup[data_row['ADMIN']] = data_row['custom_color']
-    
-    current_data = dict(geo_source.data)  # Convert to plain dict
+
+    current_data = dict(geo_source.data)
     new_colors = list(current_data['custom_color'])
-    
-    for i in range(len(current_data['ADMIN'])):
-        admin = current_data['ADMIN'][i]
+    for k in range(len(current_data['ADMIN'])):
+        admin = current_data['ADMIN'][k]
         if admin in value_lookup:
-            new_colors[i] = value_lookup[admin]
-    
+            new_colors[k] = value_lookup[admin]
     current_data['custom_color'] = new_colors
     geo_source.data = current_data
-
-    terms_dict = {
-        "United States of America": "US",
-        "United Arab Emirates": "UAE",
-        "United Kingdom": "UK",
-        "Hong Kong S.A.R": 'Hong Kong'
-    }
-    top = (filtered_world.iloc[top15_idx][["ADMIN", "exports"]]
-        .dropna()
-        .sort_values("exports", ascending=False))
-    labels = top["ADMIN"].replace(terms_dict)
-
-    top15_table_source.data = dict(country=labels.tolist(), value=top["exports"].tolist())
-    top15_chart_source.data = dict(country=labels.tolist(), value=top["exports"].tolist())
-    top15_chart.x_range.factors = labels.tolist()
 
 # Series explorer
 def _update_series_country_options():
@@ -1311,6 +1390,10 @@ s_type.on_change('value', lambda a, o, n: _on_snapshot_product_change(a, o, n))
 
 top15_button.on_click(highlight_top15)
 reset_button.on_click(reset_top15)
+
+def _on_top15_mode_change(attr, old, new):
+    update_snapshot_by_index(int(month_slider.value))
+top15_mode_sel.on_change('value', _on_top15_mode_change)
 
 def on_month_slider(attr, old, new):
     update_snapshot_by_index(int(new))
@@ -1480,6 +1563,7 @@ top15_table = DataTable(
 )
 
 top15_col = column(
+    row(top15_mode_sel),
     top15_buttons_row,
     top15_chart,
     Spacer(height=8),
