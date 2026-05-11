@@ -164,6 +164,23 @@ if USE_OPTIMIZED:
 
     DATE_INDEX = pd.DatetimeIndex([pd.Timestamp(d) for d in DATE_LIST])
 
+    # Normalise/merge duplicate country names that exist in the historical data.
+    # When both src and dst exist, src is folded into dst (dst keeps its value,
+    # src fills any NaN gaps), then src is dropped.
+    COUNTRY_RENAMES = {
+        'Hong Kong S.A.R.': 'Hong Kong',
+        'World excluding Hong Kong S.A.R.': 'World excluding Hong Kong',
+        'Macao S.A.R': 'Macao',
+        "Democratic People's Republic of Korea": 'North Korea',
+        'DPRK': 'North Korea',
+    }
+    _long_df['country'] = _long_df['country'].replace(COUNTRY_RENAMES)
+    # If after the rename there are duplicate (flow, country, product, cat, unit, date) rows,
+    # collapse them by taking the first non-null (preserving the dst value when both exist).
+    _long_df = _long_df.sort_values('value', na_position='last').drop_duplicates(
+        ['flow', 'country', 'product', 'product_cat', 'unit', 'date'], keep='first'
+    )
+
     print("[CACHE] Pivoting to wide format per combo + pre-computing YoY...")
     _t0 = pd.Timestamp.now()
     WIDE: dict = {}
@@ -185,6 +202,14 @@ if USE_OPTIMIZED:
     del _long_df
     print(f"[CACHE] Pivoted {len(WIDE)} combos in "
           f"{(pd.Timestamp.now() - _t0).total_seconds():.2f}s")
+
+    # Apply the same renames to metadata_df + countries set so the country
+    # dropdown and metadata lookups stay consistent with the wide tables.
+    metadata_df['country'] = metadata_df['country'].replace(COUNTRY_RENAMES)
+    metadata_df = metadata_df.drop_duplicates(
+        subset=['flow', 'country', 'product', 'product_cat', 'unit'], keep='first'
+    )
+    countries = set(metadata_df['country'].unique())
 
     _empty_series = pd.Series([np.nan] * len(DATE_LIST), index=DATE_INDEX)
 
@@ -419,8 +444,17 @@ def build_filtered_world():
     if 'geometry' not in filtered.columns and '__geom' in filtered.columns:
         filtered = filtered.rename(columns={'__geom': 'geometry'})
     
+    # Manual overrides for admins where fuzzy matching is unreliable.
+    ADMIN_OVERRIDE = {
+        "Hong Kong S.A.R.":     "Hong Kong",
+        "Macao S.A.R":          "Macao",
+    }
+
     admin_to_df_map = {}
     for admin_name in filtered['ADMIN']:
+        if admin_name in ADMIN_OVERRIDE:
+            admin_to_df_map[admin_name] = ADMIN_OVERRIDE[admin_name]
+            continue
         match = difflib.get_close_matches(admin_name, country_list, n=1, cutoff=0.7)
         admin_to_df_map[admin_name] = match[0] if match else None
     
@@ -434,9 +468,10 @@ def build_filtered_world():
     
     terms_dict = {
         "United States of America": "US",
-        "United Arab Emirates": "UAE",
-        "United Kingdom": "UK",
-        "Hong Kong S.A.R": 'Hong Kong'
+        "United Arab Emirates":     "UAE",
+        "United Kingdom":           "UK",
+        "Hong Kong S.A.R.":         "Hong Kong",
+        "Macao S.A.R":              "Macao",
     }
     filtered["ADMIN_DISPLAY"] = filtered["ADMIN"].replace(terms_dict)
     
@@ -708,9 +743,8 @@ TOP15_POS_N     = 10
 TOP15_NEG_N     = 5
 TERMS_DICT = {
     "United States of America": "US",
-    "United Arab Emirates": "UAE",
-    "United Kingdom": "UK",
-    "Hong Kong S.A.R": "Hong Kong",
+    "United Arab Emirates":     "UAE",
+    "United Kingdom":           "UK",
 }
 
 series_source = ColumnDataSource(data=dict(date=[], value=[]))
