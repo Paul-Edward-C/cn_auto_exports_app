@@ -745,6 +745,8 @@ TERMS_DICT = {
     "United States of America": "US",
     "United Arab Emirates":     "UAE",
     "United Kingdom":           "UK",
+    "Hong Kong S.A.R.":         "Hong Kong",
+    "Macao S.A.R":              "Macao",
 }
 
 series_source = ColumnDataSource(data=dict(date=[], value=[]))
