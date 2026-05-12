@@ -1089,18 +1089,26 @@ def _compute_top15_by_mode(mode: str):
 
     if mode == "YoY contribution":
         # Per-country contribution to World's YoY % growth:
-        # (country_now - country_past) / |World_past| * 100. Sums to World YoY %.
+        #   (country_chg / world_chg) * world_yoy_pct
+        # where world_yoy_pct = (world_now - world_past) / world_past * 100.
+        # Equivalently: country_chg / world_past * 100. Sums to world_yoy_pct.
         flow_, product_, product_cat_, type_ = cur_snap()
         i_ = int(month_slider.value)
         if i_ < 12:
             return [], [], []
+        snap_now_full  = get_snapshot_for_date(flow_, product_, product_cat_, type_, i_)
         snap_past_full = get_snapshot_for_date(flow_, product_, product_cat_, type_, i_ - 12)
+        world_now  = snap_now_full.get('World')
         world_past = snap_past_full.get('World')
-        if (world_past is None
-                or (isinstance(world_past, float) and (not np.isfinite(world_past) or world_past == 0))
-                or world_past == 0):
+        if (world_now is None or world_past is None
+                or not np.isfinite(float(world_now)) or not np.isfinite(float(world_past))
+                or float(world_past) == 0):
             return [], [], []
-        change = ((now - past) / abs(float(world_past)) * 100.0)
+        world_chg = float(world_now) - float(world_past)
+        if world_chg == 0:
+            return [], [], []
+        world_yoy_pct = world_chg / float(world_past) * 100.0
+        change = ((now - past) / world_chg) * world_yoy_pct
         change = change.replace([np.inf, -np.inf], np.nan).dropna()
     elif mode == "YoY %":
         valid = (past.abs() > 0) & now.notna()
@@ -1120,11 +1128,11 @@ def _compute_top15_by_mode(mode: str):
     colors = [POS_BAR_COLOR if v >= 0 else NEG_BAR_COLOR for v in values]
     return admins, values, colors
 
-def _value_for_admin(snap_now, snap_past, admin, mode, world_past=None):
+def _value_for_admin(snap_now, snap_past, admin, mode, world_now=None, world_past=None):
     """Compute the metric value for one admin given current and (optional) past snapshots.
 
-    For 'YoY contribution', world_past is the World total at t-12 — the divisor that
-    makes per-country contributions sum to the World YoY %.
+    For 'YoY contribution', world_now/world_past are the World totals at t and t-12;
+    contribution = (country_chg / world_chg) * world_yoy_pct = country_chg / world_past * 100.
     """
     df_name = admin_to_df_map.get(admin)
     if df_name is None:
@@ -1142,11 +1150,15 @@ def _value_for_admin(snap_now, snap_past, admin, mode, world_past=None):
     if n is None:
         return None
     if mode == "YoY contribution":
-        if (world_past is None
-                or (isinstance(world_past, float) and (not np.isfinite(world_past) or world_past == 0))
-                or world_past == 0):
+        if (world_now is None or world_past is None
+                or not np.isfinite(float(world_now)) or not np.isfinite(float(world_past))
+                or float(world_past) == 0):
             return None
-        return (float(n) - float(p)) / abs(float(world_past)) * 100.0
+        world_chg = float(world_now) - float(world_past)
+        if world_chg == 0:
+            return None
+        world_yoy_pct = world_chg / float(world_past) * 100.0
+        return ((float(n) - float(p)) / world_chg) * world_yoy_pct
     # YoY %
     if p == 0:
         return None
@@ -1161,15 +1173,17 @@ def _three_month_values(mode, admins, flow, product, product_cat, type_str, i):
             continue
         snap_now = get_snapshot_for_date(flow, product, product_cat, type_str, idx)
         snap_past = None
+        world_now = None
         world_past = None
         if mode in ("YoY contribution", "YoY %"):
             if idx < 12:
                 continue
             snap_past = get_snapshot_for_date(flow, product, product_cat, type_str, idx - 12)
             if mode == "YoY contribution":
+                world_now = snap_now.get('World')
                 world_past = snap_past.get('World')
         for k, admin in enumerate(admins):
-            cols[offset][k] = _value_for_admin(snap_now, snap_past, admin, mode, world_past)
+            cols[offset][k] = _value_for_admin(snap_now, snap_past, admin, mode, world_now, world_past)
     return cols[0], cols[1], cols[2]
 
 def _apply_top15(mode: str, flow: str, product: str, product_cat: str, type_str: str, row_date: str):
