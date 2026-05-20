@@ -60,7 +60,7 @@ print(f"[BOOT] Starting initialization...")
 # -----------------------------------------------------------------------------
 USE_OPTIMIZED = (
     OPTIMIZED_DIR.exists() and 
-    (OPTIMIZED_DIR / "data_normalized.parquet").exists() and
+    (OPTIMIZED_DIR / "wide.pkl").exists() and
     (OPTIMIZED_DIR / "column_metadata.parquet").exists() and
     (OPTIMIZED_DIR / "dates.parquet").exists()
 )
@@ -152,21 +152,32 @@ if USE_OPTIMIZED:
         key = (data_row['flow'], data_row['country'], data_row['product'], data_row['product_cat'], data_row['unit'])
         key_to_col[key] = data_row['column']
     
-    # Load the entire normalized parquet ONCE, pivot per (flow, product, product_cat, unit)
-    # into wide DataFrames keyed by date × country. This replaces per-call pd.read_parquet
-    # so every snapshot / series fetch is an in-memory slice.
-    print("[CACHE] Loading full normalized parquet into memory...")
+    # WIDE tables are PRECOMPUTED offline (see build_wide.py / the China notebook) and
+    # shipped as a pickle, so the dyno never does the 5M-row reshape — that peaked
+    # ~1.3 GB and OOM-killed the 512 MB dyno (R14/R15). wide.pkl holds {'WIDE'}: a dict
+    # keyed by (flow, product, product_cat, unit) of date x country float32 frames,
+    # reindexed to DATE_INDEX with COUNTRY_RENAMES baked in. We ship only WIDE (keeps the
+    # file < GitHub's 100 MB limit) and recompute the YoY tables here — cheap on these
+    # small frames.
+    import pickle
+    print("[CACHE] Loading precomputed wide tables (wide.pkl)...")
     _t0 = pd.Timestamp.now()
-    _long_df = pd.read_parquet(OPTIMIZED_DIR / "data_normalized.parquet")
-    _long_df['date'] = pd.to_datetime(_long_df['date'])
-    print(f"[CACHE] Long format loaded: {len(_long_df):,} rows in "
+    DATE_INDEX = pd.DatetimeIndex([pd.Timestamp(d) for d in DATE_LIST])
+    with open(OPTIMIZED_DIR / "wide.pkl", "rb") as _f:
+        WIDE: dict = pickle.load(_f)["WIDE"]
+    WIDE_YOY: dict = {}
+    WIDE_YOY_PCT: dict = {}
+    for _k, _w in WIDE.items():
+        _past = _w.shift(12)
+        WIDE_YOY[_k] = (_w - _past).astype("float32")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            WIDE_YOY_PCT[_k] = (((_w - _past) / _past.abs() * 100.0)
+                                .replace([np.inf, -np.inf], np.nan).astype("float32"))
+    print(f"[CACHE] Loaded {len(WIDE)} combos + computed YoY in "
           f"{(pd.Timestamp.now() - _t0).total_seconds():.2f}s")
 
-    DATE_INDEX = pd.DatetimeIndex([pd.Timestamp(d) for d in DATE_LIST])
-
-    # Normalise/merge duplicate country names that exist in the historical data.
-    # When both src and dst exist, src is folded into dst (dst keeps its value,
-    # src fills any NaN gaps), then src is dropped.
+    # COUNTRY_RENAMES are already baked into wide.pkl; kept here only to keep
+    # metadata_df (which drives the dropdowns) consistent with the wide tables.
     COUNTRY_RENAMES = {
         'Hong Kong S.A.R.': 'Hong Kong',
         'World excluding Hong Kong S.A.R.': 'World excluding Hong Kong',
@@ -174,34 +185,6 @@ if USE_OPTIMIZED:
         "Democratic People's Republic of Korea": 'North Korea',
         'DPRK': 'North Korea',
     }
-    _long_df['country'] = _long_df['country'].replace(COUNTRY_RENAMES)
-    # If after the rename there are duplicate (flow, country, product, cat, unit, date) rows,
-    # collapse them by taking the first non-null (preserving the dst value when both exist).
-    _long_df = _long_df.sort_values('value', na_position='last').drop_duplicates(
-        ['flow', 'country', 'product', 'product_cat', 'unit', 'date'], keep='first'
-    )
-
-    print("[CACHE] Pivoting to wide format per combo + pre-computing YoY...")
-    _t0 = pd.Timestamp.now()
-    WIDE: dict = {}
-    WIDE_YOY: dict = {}
-    WIDE_YOY_PCT: dict = {}
-    for (flow, prod, cat, unit), group in _long_df.groupby(
-        ['flow', 'product', 'product_cat', 'unit'], sort=False
-    ):
-        wide = group.pivot_table(index='date', columns='country', values='value', aggfunc='first')
-        wide = wide.reindex(DATE_INDEX)
-        key = (flow, prod, cat, unit)
-        WIDE[key] = wide
-        past = wide.shift(12)
-        WIDE_YOY[key] = wide - past
-        with np.errstate(divide='ignore', invalid='ignore'):
-            yoy_pct = (wide - past) / past.abs() * 100.0
-        WIDE_YOY_PCT[key] = yoy_pct.replace([np.inf, -np.inf], np.nan)
-    # Free the long table — wide tables hold everything we need
-    del _long_df
-    print(f"[CACHE] Pivoted {len(WIDE)} combos in "
-          f"{(pd.Timestamp.now() - _t0).total_seconds():.2f}s")
 
     # Apply the same renames to metadata_df + countries set so the country
     # dropdown and metadata lookups stay consistent with the wide tables.
