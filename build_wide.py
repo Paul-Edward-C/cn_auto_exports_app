@@ -6,13 +6,16 @@ and pivot it per (flow, product, product_cat, unit) at boot. That reshape peaked
 ~1.3 GB and OOM-killed the 512 MB dyno (R14/R15). This script does the reshape offline
 and ships the result as a pickle the app loads in ~110 MB.
 
-Run with an env whose pandas MINOR version matches the dyno pin
-(requirements.txt: pandas==2.2.2). pandas DataFrame pickles are NOT guaranteed loadable
-across pandas versions, so use the 'animation' conda env (pandas 2.2.3), e.g.:
+Run with an env whose numpy MAJOR version matches the dyno pins
+(requirements.txt: numpy==1.26.4, pandas==2.2.2). This is critical: numpy 2.x pickles
+reference 'numpy._core' and FAIL to load on numpy 1.x with
+"ModuleNotFoundError: No module named 'numpy._core.numeric'". Base anaconda matches
+(numpy 1.26.4; its pandas 2.3.3 is pickle-compatible with the dyno's 2.2.2 — verified):
 
-    /Users/paul/opt/anaconda3/envs/animation/bin/python build_wide.py
+    /Users/paul/opt/anaconda3/bin/python build_wide.py
 
-This mirrors the rename -> dedup -> pivot -> YoY logic in app/main.py exactly.
+Do NOT use the 'animation' env — it has numpy 2.x. This mirrors the rename -> dedup ->
+pivot logic in app/main.py; the app recomputes YoY at boot.
 """
 import pickle
 from pathlib import Path
