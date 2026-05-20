@@ -165,6 +165,12 @@ if USE_OPTIMIZED:
     DATE_INDEX = pd.DatetimeIndex([pd.Timestamp(d) for d in DATE_LIST])
     with open(OPTIMIZED_DIR / "wide.pkl", "rb") as _f:
         WIDE: dict = pickle.load(_f)["WIDE"]
+    # China is the reporting economy, never a trading partner. Drop the spurious
+    # self-trade column so China renders grey on the map for every category. It's
+    # negligible for most goods but large for semiconductors (processing-trade
+    # re-imports of Chinese-origin chips), which is why it only showed up there.
+    for _k in WIDE:
+        WIDE[_k] = WIDE[_k].drop(columns="China", errors="ignore")
     WIDE_YOY: dict = {}
     WIDE_YOY_PCT: dict = {}
     for _k, _w in WIDE.items():
@@ -192,6 +198,9 @@ if USE_OPTIMIZED:
     metadata_df = metadata_df.drop_duplicates(
         subset=['flow', 'country', 'product', 'product_cat', 'unit'], keep='first'
     )
+    # Drop China as a partner everywhere (see WIDE note above) so it's also absent
+    # from the country dropdown, not just the map.
+    metadata_df = metadata_df[metadata_df['country'] != 'China']
     countries = set(metadata_df['country'].unique())
 
     _empty_series = pd.Series([np.nan] * len(DATE_LIST), index=DATE_INDEX)
