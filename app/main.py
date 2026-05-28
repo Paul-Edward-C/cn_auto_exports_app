@@ -171,14 +171,13 @@ if USE_OPTIMIZED:
     # re-imports of Chinese-origin chips), which is why it only showed up there.
     for _k in WIDE:
         WIDE[_k] = WIDE[_k].drop(columns="China", errors="ignore")
+    # Pre-bake only absolute YoY (used by the snapshot map every tick). YoY % is
+    # computed on demand in get_yoy_snapshot_for_date — a single-row division on a
+    # ~136-row frame is microseconds, and skipping the full WIDE_YOY_PCT precompute
+    # saves ~50 MB at boot (helped recover headroom on the 512 MB dyno after an OOM).
     WIDE_YOY: dict = {}
-    WIDE_YOY_PCT: dict = {}
     for _k, _w in WIDE.items():
-        _past = _w.shift(12)
-        WIDE_YOY[_k] = (_w - _past).astype("float32")
-        with np.errstate(divide="ignore", invalid="ignore"):
-            WIDE_YOY_PCT[_k] = (((_w - _past) / _past.abs() * 100.0)
-                                .replace([np.inf, -np.inf], np.nan).astype("float32"))
+        WIDE_YOY[_k] = (_w - _w.shift(12)).astype("float32")
     print(f"[CACHE] Loaded {len(WIDE)} combos + computed YoY in "
           f"{(pd.Timestamp.now() - _t0).total_seconds():.2f}s")
 
@@ -218,10 +217,23 @@ if USE_OPTIMIZED:
         return wide.iloc[date_idx].dropna().to_dict()
 
     def get_yoy_snapshot_for_date(flow, product, product_cat, unit, date_idx, pct=False):
-        """Pre-baked YoY snapshot. pct=False → absolute change; pct=True → YoY %."""
-        store = WIDE_YOY_PCT if pct else WIDE_YOY
-        wide = store.get((flow, product, product_cat, unit))
-        if wide is None or date_idx < 12 or date_idx >= len(DATE_LIST):
+        """Snapshot of YoY change for one date.
+        pct=False -> pre-baked WIDE_YOY (absolute change).
+        pct=True  -> computed on demand from WIDE (single-row YoY %)."""
+        if date_idx < 12 or date_idx >= len(DATE_LIST):
+            return {}
+        key = (flow, product, product_cat, unit)
+        if pct:
+            wide = WIDE.get(key)
+            if wide is None:
+                return {}
+            cur = wide.iloc[date_idx]
+            past = wide.iloc[date_idx - 12]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                pct_chg = (cur - past) / past.abs() * 100.0
+            return pct_chg.replace([np.inf, -np.inf], np.nan).dropna().to_dict()
+        wide = WIDE_YOY.get(key)
+        if wide is None:
             return {}
         return wide.iloc[date_idx].dropna().to_dict()
 
