@@ -48,6 +48,10 @@ DATA_DIR = BASE_DIR / "data"
 
 WORLD_SHP = DATA_DIR / "ne_10m_admin_0_countries.shp"
 WORLD_GEOJSON = DATA_DIR / "ne_10m_admin_0_countries.geojson"
+# Lightweight, pre-simplified geometry (built offline by prep_world.py). Preferred
+# at boot — ~93% fewer vertices than the raw GeoJSON, so the map ships far less data
+# to the browser and pans/zooms smoothly. Falls back to GeoJSON/shapefile if absent.
+WORLD_SIMPLIFIED = DATA_DIR / "world_patches_simplified.parquet"
 OPTIMIZED_DIR = DATA_DIR / "optimized"
 
 print(f"[BOOT] ===================================")
@@ -82,7 +86,16 @@ def load_world_geometry():
     _using_gpd = False
     
     try:
-        if WORLD_GEOJSON.exists():
+        if WORLD_SIMPLIFIED.exists():
+            # Preferred: pre-simplified geometry. Reconstruct the same DataFrame the
+            # GeoJSON path produces (original properties + a GeoJSON-dict `geometry`),
+            # so all downstream filtering/patch-building is unchanged — just lighter.
+            dfp = pd.read_parquet(WORLD_SIMPLIFIED)
+            world = pd.DataFrame([json.loads(s) for s in dfp['props_json']])
+            world['geometry'] = [json.loads(s) for s in dfp['geometry_json']]
+            _using_gpd = False
+            print(f"[CACHE] ✅ Using pre-simplified geometry ({len(world)} features, ~93% fewer vertices)")
+        elif WORLD_GEOJSON.exists():
             with WORLD_GEOJSON.open('r', encoding='utf-8') as f:
                 gj = json.load(f)
             world = pd.DataFrame([feat["properties"] | {"__geom": feat["geometry"]} for feat in gj["features"]])
