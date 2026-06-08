@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from bokeh.layouts import column, row
 from bokeh.models import (ColumnDataSource, Select, Button, HoverTool, Div,
-                          LogColorMapper, ColorBar, DataRange1d, LinearAxis,
+                          LinearColorMapper, ColorBar, DataRange1d, LinearAxis,
                           NumeralTickFormatter, DatetimeTickFormatter, Span,
                           Label, SaveTool, Legend, LegendItem)
 from bokeh.plotting import figure
@@ -24,7 +24,7 @@ from shared_data import (FONT, BRAND, PANEL_BG, MAX_SERIES, SERIES_COLORS, CHART
                          REGION_MEMBER_IDX)
 from shared_data_auto import (IDX, CUR, ALL_DATES, ECON_LAST,
                               REGION_ISO, REGION_LABELS, REPORTERS, ECON_CATS,
-                              MEASURE_COL, UNIT_LABEL)
+                              FLOWS, ECON_FLOWS, MEASURE_COL, UNIT_LABEL)
 
 
 def build_auto_panel():
@@ -34,7 +34,9 @@ def build_auto_panel():
         iso3=WORLD_ISO, name=WORLD_NAME,
         hovname=WORLD_NAME, value=[np.nan] * N_PATCH))
 
-    color_mapper = LogColorMapper(palette=PALETTE, low=0.01, high=5.0, nan_color='#e8e8e3')
+    # Linear (not log) — Trade balance can be negative, so the scale must span negatives.
+    # Matches the China panel; low/high are set from the data each refresh.
+    color_mapper = LinearColorMapper(palette=PALETTE, low=0.0, high=1.0, nan_color='#e8e8e3')
 
     mp = figure(width=CHART_W, height=CHART_H, match_aspect=True,
                 x_range=(-170, 190), y_range=(-58, 85),
@@ -134,7 +136,7 @@ def build_auto_panel():
 
     # ---------------------------------------------------------------- controls
     econ_sel = Select(title='Reporting economy', value='Japan', options=REPORTERS, width=170)
-    flow_sel = Select(title='Flow', value='Exports', options=['Exports', 'Imports'], width=110)
+    flow_sel = Select(title='Flow', value='Exports', options=ECON_FLOWS.get('Japan', FLOWS), width=140)
     cat_sel = Select(title='Powertrain', value='Total', options=ECON_CATS['Japan'], width=170)
     measure_sel = Select(title='Measure', value='Value (USD bn)',
                          options=list(MEASURE_COL), width=160)
@@ -229,12 +231,13 @@ def build_auto_panel():
         at_date = sub[sub['Date'] == edate]
         by_iso = at_date.groupby(level=0, observed=True)['value'].sum()
         vals = [by_iso.get(i, np.nan) for i in map_src.data['iso3']]
-        vals = [v if (v is not None and v == v and v > 0) else np.nan for v in vals]
+        vals = [v if (v is not None and v == v) else np.nan for v in vals]
         map_src.data['value'] = vals
-        pos = [v for v in vals if v == v]
-        if pos:
-            color_mapper.low = max(min(pos), max(pos) / 1e4)
-            color_mapper.high = max(pos)
+        # Linear range from the data (Trade balance can be negative → deficits at the low end).
+        finite = [v for v in vals if v == v]
+        if finite:
+            lo, hi = min(finite), max(finite)
+            color_mapper.low, color_mapper.high = (lo, hi) if lo != hi else (lo, lo + 1)
         mp.title.text = f'{econ}, {flow}, {cat}, USD bn, {edate:%b %Y}'
 
     def on_tap(attr, old, new):
@@ -296,6 +299,12 @@ def build_auto_panel():
         cat_sel.options = opts
         if cat_sel.value not in opts:
             cat_sel.value = 'Total' if 'Total' in opts else opts[0]
+        # Trade balance is only available for some reporters (Japan/Korea) — keep the Flow
+        # options in sync so it isn't offered where the data can't supply it.
+        fopts = ECON_FLOWS.get(new, FLOWS)
+        flow_sel.options = fopts
+        if flow_sel.value not in fopts:
+            flow_sel.value = 'Exports' if 'Exports' in fopts else fopts[0]
         refresh_map()
 
     econ_sel.on_change('value', on_econ_change)

@@ -43,9 +43,10 @@ if not IDX.index.is_monotonic_increasing:
     IDX = IDX.sort_index()
 
 # Region aggregates (iso3 'R_*', not on the map) — selected via the Region dropdown.
-# iso3 is already object/str here, so test it directly; the old .astype(str) made a
-# redundant 1.7 M-row string copy. na=False guards any missing iso3 in the mask.
-_agg = _DATA[_DATA['iso3'].str.startswith('R_', na=False)][['country', 'iso3']].drop_duplicates()
+# iso3 is categorical (dictionary-encoded in the parquet): test the handful of categories,
+# not all ~2.5 M rows.
+_r_isos = [c for c in _DATA['iso3'].cat.categories if str(c).startswith('R_')]
+_agg = _DATA[_DATA['iso3'].isin(_r_isos)][['country', 'iso3']].drop_duplicates()
 REGION_ISO = dict(zip(_agg['country'], _agg['iso3']))
 REGION_LABELS = sorted(REGION_ISO)
 
@@ -68,6 +69,20 @@ CATEGORIES = _ordered_cats(_DATA['category'].unique())
 # Powertrains actually available per reporter (Comtrade reporters only have 'Total').
 ECON_CATS = {e: _ordered_cats(_DATA.loc[_DATA['economy'] == e, 'category'].unique())
              for e in REPORTERS}
+
+_FLOW_ORDER = ['Exports', 'Imports', 'Trade balance']
+
+
+def _ordered_flows(flows):
+    s = set(flows)
+    return [f for f in _FLOW_ORDER if f in s] + sorted(f for f in s if f not in _FLOW_ORDER)
+
+
+FLOWS = _ordered_flows(_DATA['flow'].unique())
+# Flows available per reporter: only Japan/Korea carry a Trade balance flow in the source,
+# so the panel offers it only for those reporters (others show Exports/Imports).
+ECON_FLOWS = {e: _ordered_flows(_DATA.loc[_DATA['economy'] == e, 'flow'].unique())
+              for e in REPORTERS}
 
 ALL_DATES = [pd.Timestamp(d) for d in np.sort(_DATA['Date'].unique())]
 
