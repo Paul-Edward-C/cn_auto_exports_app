@@ -6,24 +6,38 @@ don't repeat per session. ``panel_cn.build_cn_panel()`` reads from this module.
 import json
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from shared_data import HERE
 
 DATA_PARQUET = HERE / 'data' / 'cn_long.parquet'
 
-_DATA = pd.read_parquet(DATA_PARQUET)          # string columns are categorical (~90 MB)
-_DATA['Date'] = pd.to_datetime(_DATA['Date'])
+# self_destruct frees each Arrow buffer as it's converted, so the Arrow + pandas copies
+# don't coexist — roughly halves the read transient on a 512 MB dyno.
+_DATA = pq.read_table(DATA_PARQUET).to_pandas(split_blocks=True, self_destruct=True)
+# Parquet already stores Date as datetime64[ns]; only convert if that ever isn't the case
+# (the row-wise to_datetime copy briefly doubles the column — ~70 MB at boot otherwise).
+if not np.issubdtype(_DATA['Date'].dtype, np.datetime64):
+    _DATA['Date'] = pd.to_datetime(_DATA['Date'])
 CUR = _DATA['Date'].max()
 
-# MultiIndex for O(log n) .loc lookups. The parquet is pre-sorted by these keys, so set_index
-# yields a monotonic index — only sort defensively if that ever isn't the case.
-IDX = (_DATA[['flow', 'product', 'product_cat', 'unit', 'iso3', 'Date', 'value']]
-       .set_index(['flow', 'product', 'product_cat', 'unit', 'iso3']))
+# MultiIndex for O(log n) .loc lookups. Built with from_arrays (not set_index) so the index
+# shares the columns' categorical arrays instead of copying them — set_index spiked ~+440 MB
+# at boot building this same 84 MB index; from_arrays costs ~+55 MB. The parquet is pre-sorted
+# by these keys, so the index is monotonic — only sort defensively if that ever isn't the case.
+_KEYS = ['flow', 'product', 'product_cat', 'unit', 'iso3']
+IDX = pd.DataFrame(
+    {'Date': _DATA['Date'].to_numpy(), 'value': _DATA['value'].to_numpy()},
+    index=pd.MultiIndex.from_arrays([_DATA[k]._values for k in _KEYS], names=_KEYS),
+)
 if not IDX.index.is_monotonic_increasing:
     IDX = IDX.sort_index()
 
 # Region aggregates (iso3 'R_*', not on the map) — selected via the Region dropdown.
-_agg = _DATA[_DATA['iso3'].astype(str).str.startswith('R_')][['country', 'iso3']].drop_duplicates()
+# iso3 is categorical: test the handful of categories, not all 4.7 M rows. The old
+# .astype(str) materialised 4.7 M Python strings — a ~400 MB transient spike at boot.
+_r_isos = [c for c in _DATA['iso3'].cat.categories if str(c).startswith('R_')]
+_agg = _DATA[_DATA['iso3'].isin(_r_isos)][['country', 'iso3']].drop_duplicates()
 REGION_ISO = dict(zip(_agg['country'], _agg['iso3']))
 REGION_LABELS = sorted(REGION_ISO)
 
