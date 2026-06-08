@@ -5,10 +5,12 @@ series. Workflow: choose Flow / Product / Product-category / Unit, pick a partne
 or the Country / Region / World boxes), then 'Add to chart'. Up to four series — any mix of
 flow / partner / product / category / unit — plot together; a list lets you remove them.
 
-    /Users/paul/opt/anaconda3/bin/bokeh serve --show main.py
+Heavy, shareable data (the parquet, the index, the world geometry) lives in shared_data.py so it
+loads ONCE per process; this script — which Bokeh re-runs for every new session — only builds the
+per-session Bokeh models.
+
+    bokeh serve --show app
 """
-from pathlib import Path
-import json
 import numpy as np
 import pandas as pd
 from bokeh.io import curdoc
@@ -21,79 +23,18 @@ from bokeh.models import (ColumnDataSource, Select, Button, HoverTool, Div,
                           CustomJS)
 from bokeh.plotting import figure
 
-HERE = Path(__file__).parent
-DATA_PARQUET = HERE / 'data' / 'cn_long.parquet'
-
-# ---------------------------------------------------------------- house style
-FONT = 'Georgia'
-BRAND = '#556B2F'
-PANEL_BG = '#f4f9f4'
-REPORTER = 'China'                                   # the only reporter
-MAX_SERIES = 4
-SERIES_COLORS = ['#4682B4', '#B7410E', '#6B8E23', '#CD5C5C']
-CHART_W, CHART_H = 972, 589
-_RAMP = ['#87CEEB', '#4682B4', '#FFDB58', '#FFBF00', '#FF7F50', '#B7410E', '#CD5C5C']
-
-def _ramp_palette(stops, n=256):
-    """256-stop hex ramp by linear RGB interpolation (avoids importing matplotlib)."""
-    rgb = np.array([[int(h[i:i + 2], 16) for i in (1, 3, 5)] for h in stops], float)
-    xs, xi = np.linspace(0, 1, len(stops)), np.linspace(0, 1, n)
-    out = np.stack([np.interp(xi, xs, rgb[:, c]) for c in range(3)], axis=1).round().astype(int)
-    return ['#%02x%02x%02x' % tuple(c) for c in out]
-
-PALETTE = _ramp_palette(_RAMP)
-BACKGROUND_URL = ('https://www.eastasiaecon.com/content/images/size/w2400/2023/04/'
-                  'Image-29-4-2023-at-7.34-PM.jpeg')
-WATERMARK = 'www.eastasiaecon.com/cn/#charts'
-
-# ---------------------------------------------------------------- data
-DATA = pd.read_parquet(DATA_PARQUET)       # string columns are categorical (~90 MB)
-DATA['Date'] = pd.to_datetime(DATA['Date'])
-CUR = DATA['Date'].max()
-# MultiIndex for O(log n) .loc lookups. The parquet is pre-sorted by these keys, so set_index
-# yields a monotonic index — only sort defensively if that ever isn't the case.
-IDX = (DATA[['flow', 'product', 'product_cat', 'unit', 'iso3', 'Date', 'value']]
-       .set_index(['flow', 'product', 'product_cat', 'unit', 'iso3']))
-if not IDX.index.is_monotonic_increasing:
-    IDX = IDX.sort_index()
-
-# Region aggregates (iso3 'R_*', not on the map) — selected via the Region dropdown.
-_agg = DATA[DATA['iso3'].astype(str).str.startswith('R_')][['country', 'iso3']].drop_duplicates()
-REGION_ISO = dict(zip(_agg['country'], _agg['iso3']))
-REGION_LABELS = sorted(REGION_ISO)
-REGION_OF = json.loads((DATA_PARQUET.parent / 'region_map.json').read_text())   # iso3 -> region
-
-# Dimension options. Product-category cascades from Product (e.g. Semis has ICs…, Autos has ICE…).
-_FLOW_ORDER = ['Exports', 'Imports', 'Trade balance']
-_PROD_ORDER = ['Total', 'Autos', 'Semis', 'Batteries', 'Solar', 'Rare earths', 'Industrial robots']
-_UNIT_ORDER = ['USD bn', 'USD bn, SA', 'USD mn', 'Unit', 'Unit mn', 'KG mn', 'KG', 'Carat', '-']
-
-def _order(values, pref):
-    s = set(values)
-    return [v for v in pref if v in s] + sorted(v for v in s if v not in pref)
-
-FLOWS = _order(DATA['flow'].unique(), _FLOW_ORDER)
-PRODUCTS = _order(DATA['product'].unique(), _PROD_ORDER)
-UNITS = _order(DATA['unit'].unique(), _UNIT_ORDER)
-PRODUCT_CATS = {p: _order(DATA.loc[DATA['product'] == p, 'product_cat'].unique(), ['Total'])
-                for p in PRODUCTS}
-
-WORLD = pd.read_parquet(HERE / 'data' / 'world_patches.parquet')
-WORLD['xs'] = WORLD['xs'].map(list)
-WORLD['ys'] = WORLD['ys'].map(list)
+from shared_data import (FONT, BRAND, PANEL_BG, MAX_SERIES, SERIES_COLORS, CHART_W, CHART_H,
+                         PALETTE, BACKGROUND_URL, WATERMARK, IDX, CUR, ALL_DATES,
+                         REGION_ISO, REGION_LABELS, REGION_MEMBER_IDX,
+                         FLOWS, PRODUCTS, UNITS, PRODUCT_CATS,
+                         WORLD_XS, WORLD_YS, WORLD_ISO, WORLD_NAME, N_PATCH,
+                         COUNTRY_NAMES_SORTED, ISO_IDX, COUNTRY_ISO)
 
 # ---------------------------------------------------------------- map
 map_src = ColumnDataSource(dict(
-    xs=list(WORLD['xs']), ys=list(WORLD['ys']),
-    iso3=list(WORLD['iso3']), name=list(WORLD['name']),
-    hovname=list(WORLD['name']), value=[np.nan] * len(WORLD)))
-
-# Region membership by map patch (Region dropdown highlights the members).
-REGION_MEMBER_IDX = {}
-for _j, _iso in enumerate(WORLD['iso3']):
-    _r = REGION_OF.get(_iso)
-    if _r:
-        REGION_MEMBER_IDX.setdefault(_r, []).append(_j)
+    xs=WORLD_XS, ys=WORLD_YS,
+    iso3=WORLD_ISO, name=WORLD_NAME,
+    hovname=WORLD_NAME, value=[np.nan] * N_PATCH))
 
 # Linear (not log) — Trade balance can be negative and units vary in scale.
 color_mapper = LinearColorMapper(palette=PALETTE, low=0.0, high=1.0, nan_color='#e8e8e3')
@@ -130,7 +71,6 @@ mp.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen', text=WATERMA
                     text_color='#556B2F', text_alpha=0.8))
 
 # ---------------------------------------------------------------- line (up to 4 series)
-ALL_DATES = [pd.Timestamp(d) for d in np.sort(DATA['Date'].unique())]
 line_src = ColumnDataSource(dict({'date': ALL_DATES},
                                  **{f's{i}': [np.nan] * len(ALL_DATES) for i in range(MAX_SERIES)}))
 
@@ -248,9 +188,7 @@ pcat_sel = Select(title='Product category', value='Total', options=PRODUCT_CATS[
 unit_sel = Select(title='Unit', value='USD bn', options=UNITS, width=120)
 add_btn = Button(label='Add to chart', button_type='primary', width=130, height=31, align='end')
 world_btn = Button(label='World', width=110, height=31, align='end')
-ISO_IDX = {iso: j for j, iso in enumerate(WORLD['iso3'])}
-COUNTRY_ISO = dict(zip(WORLD['name'], WORLD['iso3']))
-country_sel = Select(title='Country', value='Map', options=['Map'] + sorted(WORLD['name']), width=200)
+country_sel = Select(title='Country', value='Map', options=['Map'] + COUNTRY_NAMES_SORTED, width=200)
 region_sel = Select(title='Region', value='Map', options=['Map'] + REGION_LABELS, width=180)
 partner_label = Div(text='<b>Partner economy</b>',
                     styles={'font-family': FONT, 'font-size': '13px', 'font-weight': 'bold'})
@@ -442,7 +380,6 @@ footer = Div(text='<div style="font-family:Georgia;font-size:12px;color:#333;bor
                   'style="color:#556B2F;font-weight:bold;text-decoration:none;">'
                   'www.eastasiaecon.com</a></div>', sizing_mode='stretch_width')
 
-del DATA   # only IDX (+ the precomputed option lists) are used at runtime; free the copy
 refresh_map(); rebuild_chart()
 curdoc().add_root(column(header,
                          report_label,
