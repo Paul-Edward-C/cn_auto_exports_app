@@ -18,11 +18,14 @@ import pandas as pd
 HERE = Path(__file__).parent
 
 # ---------------------------------------------------------------- house style
+# East Asia Econ 2025 identity: forest green + cream + sage, serif display (bamboo logo).
 FONT = 'Georgia'
-BRAND = '#556B2F'
-PANEL_BG = '#f4f9f4'
+BRAND = '#1f4d3a'          # forest green — primary brand (headings, tabs, table header, accents)
+SAGE = '#6f9b60'           # sage green — secondary accent / hovers / borders
+CREAM = '#f5efe1'          # cream — light text on green, alternating table rows
+PANEL_BG = '#f6f2e9'       # warm cream — chart/map background
 MAX_SERIES = 4
-SERIES_COLORS = ['#4682B4', '#B7410E', '#6B8E23', '#CD5C5C']
+SERIES_COLORS = ['#1f4d3a', '#B7410E', '#6f9b60', '#4682B4']
 CHART_W, CHART_H = 972, 589
 _RAMP = ['#87CEEB', '#4682B4', '#FFDB58', '#FFBF00', '#FF7F50', '#B7410E', '#CD5C5C']
 

@@ -20,8 +20,8 @@ from bokeh.models import (ColumnDataSource, Select, Button, HoverTool, Div,
                           CustomJS)
 from bokeh.plotting import figure
 
-from shared_data import (FONT, BRAND, PANEL_BG, MAX_SERIES, SERIES_COLORS, CHART_W, CHART_H,
-                         PALETTE, BACKGROUND_URL, WATERMARK,
+from shared_data import (FONT, BRAND, SAGE, CREAM, PANEL_BG, MAX_SERIES, SERIES_COLORS,
+                         CHART_W, CHART_H, PALETTE, BACKGROUND_URL, WATERMARK,
                          WORLD_XS, WORLD_YS, WORLD_ISO, WORLD_NAME, N_PATCH,
                          COUNTRY_NAMES_SORTED, ISO_IDX, COUNTRY_ISO,
                          REGION_MEMBER_IDX)
@@ -132,13 +132,32 @@ def build_cn_panel():
                         text_color='#556B2F', text_alpha=0.8))
 
     # ---------------------------------------------------------------- data table + CSV
-    DATE_WIDTH, VAL_WIDTH = 200, 150
-    cell_fmt = HTMLTemplateFormatter(template="""
+    DATE_WIDTH, VAL_WIDTH = 120, 260
+    HEADER_HEIGHT = 72   # room for the long series titles to wrap over ~3-4 lines
+    # Forest-green header with cream text; the long titles WRAP (SlickGrid truncates by default).
+    # The title span is anchored to the top of the cell with absolute positioning — SlickGrid's
+    # own flex centering pushes a multi-line title above the cell and clips the first line.
+    # Cream alternating rows. This <style> rides along in the cell-formatter template.
+    cell_fmt = HTMLTemplateFormatter(template=f"""
 <style>
-  .slick-column-name {font-family: Georgia; font-weight: 900; font-size: 0.9rem;}
-  .slick-header-column {background-color: hsla(120, 100%, 25%, 0.1) !important;}
-  .slick-cell {font-family: Georgia; font-size: 0.9rem;}
-  .slick-row:nth-of-type(even) {background-color: hsla(120, 100%, 25%, 0.1) !important;}
+  .slick-header, .slick-header-columns {{ height: {HEADER_HEIGHT}px !important; }}
+  .slick-header-column {{
+    background: {BRAND} !important;
+    height: {HEADER_HEIGHT}px !important;
+    position: relative !important;
+    border-right: 1px solid {CREAM} !important;
+  }}
+  .slick-header-column .slick-column-name {{
+    position: absolute !important; top: 6px; left: 8px; right: 8px;
+    font-family: {FONT}; font-weight: bold; font-size: 0.8rem;
+    color: {CREAM};
+    white-space: normal !important; line-height: 1.2;
+  }}
+  .slick-cell {{ font-family: {FONT}; font-size: 0.9rem; color: {BRAND}; padding-left: 8px; }}
+  .slick-row.even {{ background-color: {CREAM} !important; }}
+  .slick-row.odd {{ background-color: #ffffff !important; }}
+  /* SlickGrid pins the data viewport below a fixed header; push it down to the taller header. */
+  .slick-viewport {{ top: {HEADER_HEIGHT}px !important; }}
 </style>
 <%= (value != null) ? value.toFixed(2) : "N/A" %>
 """)
@@ -149,7 +168,8 @@ def build_cn_panel():
                                     **{f's{i}': [] for i in range(MAX_SERIES)}))
     date_col = TableColumn(field='date', title='Date', width=DATE_WIDTH)
     data_table = DataTable(source=table_src, columns=[date_col], width=DATE_WIDTH,
-                           height=320, index_position=None, header_row=True)
+                           height=340 + HEADER_HEIGHT, row_height=26, index_position=None,
+                           header_row=True, autosize_mode='none')
 
     download_btn = Button(label='Download CSV', width=130, height=31, align='end')
     download_btn.js_on_click(CustomJS(args=dict(source=csv_src, table=data_table), code="""
