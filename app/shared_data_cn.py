@@ -46,13 +46,13 @@ REGION_LABELS = sorted(REGION_ISO)
 # region auto dashboard: product 'Passenger cars', powertrains ICE/HEV/PHEV/BEV/…
 _FLOW_ORDER = ['Exports', 'Imports', 'Trade balance']
 _PROD_ORDER = ['Total', 'Passenger cars', 'Semis', 'Batteries', 'Solar', 'Rare earths',
-               'Industrial robots', 'Passenger cars including others']
+               'Industrial robots']
 _UNIT_ORDER = ['USD bn', 'USD bn, SA', 'USD mn', 'Unit', 'Unit mn', 'KG mn', 'KG', 'Carat', '-']
 
 # Powertrain ordering mirrors the region auto dashboard's standard (_PREFERRED in its main.py).
 _PCAT_ORDER = ['Total', 'ICE', 'HEV', 'PHEV', 'BEV', 'NEV', 'Hybrid',
                'Hybrid and electric', 'Electrified', 'Other']
-_CAT_PREF = {'Passenger cars': _PCAT_ORDER, 'Passenger cars including others': _PCAT_ORDER}
+_CAT_PREF = {'Passenger cars': _PCAT_ORDER}
 
 
 def _order(values, pref):

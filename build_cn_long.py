@@ -104,6 +104,11 @@ def main():
         reg_frames.append(w)
     df = pd.concat([df] + reg_frames, ignore_index=True)
 
+    # The app exposes the CCA-headline 'Passenger cars' (ICE+HEV+PHEV+BEV) only; drop the broader
+    # 'Passenger cars including others' (all of HS 8703, incl snow/golf + other) so it never
+    # reaches the app's Product dropdown.
+    df = df[df['product'] != 'Passenger cars including others']
+
     df = df[['flow', 'product', 'product_cat', 'unit', 'country', 'iso3', 'Date', 'value']]
     # Sort by the app's index keys (iso3, not country) so it can set_index without re-sorting.
     df = df.sort_values(['flow', 'product', 'product_cat', 'unit', 'iso3', 'Date'])
