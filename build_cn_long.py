@@ -20,7 +20,10 @@ sys.path.insert(0, '/Users/paul/Documents/DATA/settings/final_notebooks')
 from my_functions import REGION_MEMBERS
 
 SRC = Path('/Users/paul/Documents/ghost/cn_auto_exports/app/data/optimized/wide.pkl')
-OUTDIR = Path(__file__).parent / 'data'
+# Write straight into app/data/ (the dir the app actually reads) so cn_long.parquet /
+# region_map.json don't have to be copied there by hand. This is SRC's parent — keeps the
+# output next to the wide.pkl it's built from, regardless of where this script lives.
+OUTDIR = SRC.parent.parent
 OUTDIR.mkdir(parents=True, exist_ok=True)
 
 REGION_CODE = {
