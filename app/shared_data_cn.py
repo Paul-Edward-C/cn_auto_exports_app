@@ -41,10 +41,18 @@ _agg = _DATA[_DATA['iso3'].isin(_r_isos)][['country', 'iso3']].drop_duplicates()
 REGION_ISO = dict(zip(_agg['country'], _agg['iso3']))
 REGION_LABELS = sorted(REGION_ISO)
 
-# Dimension options. Product-category cascades from Product (e.g. Semis has ICs…, Autos has ICE…).
+# Dimension options. Product-category cascades from Product (e.g. Semis has ICs…, Passenger
+# cars has ICE…). Auto wording follows the settings/my_functions standard shared with the
+# region auto dashboard: product 'Passenger cars', powertrains ICE/HEV/PHEV/BEV/…
 _FLOW_ORDER = ['Exports', 'Imports', 'Trade balance']
-_PROD_ORDER = ['Total', 'Autos', 'Semis', 'Batteries', 'Solar', 'Rare earths', 'Industrial robots']
+_PROD_ORDER = ['Total', 'Passenger cars', 'Semis', 'Batteries', 'Solar', 'Rare earths',
+               'Industrial robots', 'Passenger cars including others']
 _UNIT_ORDER = ['USD bn', 'USD bn, SA', 'USD mn', 'Unit', 'Unit mn', 'KG mn', 'KG', 'Carat', '-']
+
+# Powertrain ordering mirrors the region auto dashboard's standard (_PREFERRED in its main.py).
+_PCAT_ORDER = ['Total', 'ICE', 'HEV', 'PHEV', 'BEV', 'NEV', 'Hybrid',
+               'Hybrid and electric', 'Electrified', 'Other']
+_CAT_PREF = {'Passenger cars': _PCAT_ORDER, 'Passenger cars including others': _PCAT_ORDER}
 
 
 def _order(values, pref):
@@ -55,7 +63,8 @@ def _order(values, pref):
 FLOWS = _order(_DATA['flow'].unique(), _FLOW_ORDER)
 PRODUCTS = _order(_DATA['product'].unique(), _PROD_ORDER)
 UNITS = _order(_DATA['unit'].unique(), _UNIT_ORDER)
-PRODUCT_CATS = {p: _order(_DATA.loc[_DATA['product'] == p, 'product_cat'].unique(), ['Total'])
+PRODUCT_CATS = {p: _order(_DATA.loc[_DATA['product'] == p, 'product_cat'].unique(),
+                          _CAT_PREF.get(p, ['Total']))
                 for p in PRODUCTS}
 
 ALL_DATES = [pd.Timestamp(d) for d in np.sort(_DATA['Date'].unique())]
