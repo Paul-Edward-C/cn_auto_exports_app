@@ -94,8 +94,8 @@ def build_auto_panel():
         # Per-line hover: show THIS series' value (@s{i}) and the real data month (@date),
         # not the cursor position. 'vline' snaps to the x index; $name = series label.
         ln.add_tools(HoverTool(renderers=[r], mode='vline',
-                               tooltips=[('', '$name'), ('value', f'@s{i}{{0,0.000}}'),
-                                         ('date', '@date{%b %Y}')],
+                               tooltips=[('', '$name'), ('Value', f'@s{i}{{0,0.000}}'),
+                                         ('Date', '@date{%b %Y}')],
                                formatters={'@date': 'datetime'}))
     line_xr.renderers = line_renderers
     line_yr.renderers = line_renderers

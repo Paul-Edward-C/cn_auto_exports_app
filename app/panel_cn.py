@@ -97,8 +97,8 @@ def build_cn_panel():
         # data point's month (@date) — not the cursor position. 'vline' snaps to the x index; the
         # $name shows the series label (set on the renderer in rebuild_chart).
         ln.add_tools(HoverTool(renderers=[r], mode='vline',
-                               tooltips=[('', '$name'), ('value', f'@s{i}{{0,0.000}}'),
-                                         ('date', '@date{%b %Y}')],
+                               tooltips=[('', '$name'), ('Value', f'@s{i}{{0,0.000}}'),
+                                         ('Date', '@date{%b %Y}')],
                                formatters={'@date': 'datetime'}))
     line_xr.renderers = line_renderers
     line_yr.renderers = line_renderers
