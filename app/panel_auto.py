@@ -91,6 +91,12 @@ def build_auto_panel():
                     color=SERIES_COLORS[i], line_width=3, alpha=0.85)
         r.visible = False
         line_renderers.append(r)
+        # Per-line hover: show THIS series' value (@s{i}) and the real data month (@date),
+        # not the cursor position. 'vline' snaps to the x index; $name = series label.
+        ln.add_tools(HoverTool(renderers=[r], mode='vline',
+                               tooltips=[('', '$name'), ('value', f'@s{i}{{0,0.000}}'),
+                                         ('date', '@date{%b %Y}')],
+                               formatters={'@date': 'datetime'}))
     line_xr.renderers = line_renderers
     line_yr.renderers = line_renderers
 
@@ -109,10 +115,6 @@ def build_auto_panel():
         ax.major_label_text_font = FONT
         ax.major_label_text_font_size = '20px'
 
-    ln.add_tools(HoverTool(renderers=line_renderers, mode='mouse',
-                           tooltips=[('', '$name'), ('', '$y{0,0.000}'),
-                                     ('', '$x{%b %Y}')],
-                           formatters={'$x': 'datetime'}))
 
     legend = Legend(items=[], location='top_left', orientation='vertical',
                     label_text_font=FONT, label_text_font_size='14px',
@@ -182,6 +184,7 @@ def build_auto_panel():
             if i < len(series):
                 data[col] = _series_values(series[i])
                 line_renderers[i].visible = True
+                line_renderers[i].name = series[i]['label']   # $name in the hover tooltip
                 items.append(LegendItem(label={'value': series[i]['label']},
                                         renderers=[line_renderers[i]]))
             else:
