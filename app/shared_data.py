@@ -10,6 +10,7 @@ the world-map geometry, and the iso3 -> region lookup. Per-panel parquet data li
 the panel-specific shared_data modules.
 """
 from pathlib import Path
+import base64
 import json
 import numpy as np
 import pandas as pd
@@ -35,8 +36,14 @@ def _ramp_palette(stops, n=256):
 
 
 PALETTE = _ramp_palette(_RAMP)
-BACKGROUND_URL = ('https://www.eastasiaecon.com/content/images/size/w2400/2023/04/'
-                  'Image-29-4-2023-at-7.34-PM.jpeg')
+# The chart background watermark. Embedded as a same-origin data: URI (from the local file)
+# rather than an external https URL: an external image taints the plot canvas, so the browser
+# blocks the Save tool's PNG export ("Enter filename" appears but nothing downloads). A data:
+# URI is same-origin and never taints, so Save works. Refresh with:
+#   curl -o app/data/background.jpeg <image-url>
+_BG_FILE = HERE / 'data' / 'background.jpeg'
+BACKGROUND_URL = ('data:image/jpeg;base64,'
+                  + base64.b64encode(_BG_FILE.read_bytes()).decode('ascii'))
 WATERMARK = 'www.eastasiaecon.com'
 
 # ---------------------------------------------------------------- world geometry (shared)
