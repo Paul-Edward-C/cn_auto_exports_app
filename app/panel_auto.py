@@ -377,8 +377,10 @@ def build_auto_panel():
     return column(header,
                   row(econ_sel),
                   column(partner_label, row(country_sel, region_sel, world_btn)),
-                  row(flow_sel, cat_sel, measure_sel, smooth_sel, start_sel, add_btn),
-                  row(series_sel, remove_btn, clear_btn),
+                  row(flow_sel, cat_sel, measure_sel, add_btn),
+                  # smoothing and start date apply to the whole chart rather than to the
+                  # series being added, so they sit with the chart-wide controls below
+                  row(series_sel, remove_btn, clear_btn, smooth_sel, start_sel),
                   map_instr,
                   row(mp, ln),
                   footer, sizing_mode='stretch_width')
