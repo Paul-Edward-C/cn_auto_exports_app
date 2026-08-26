@@ -142,6 +142,11 @@ def build_auto_panel():
     cat_sel = Select(title='Powertrain', value='Total', options=ECON_CATS['Japan'], width=170)
     measure_sel = Select(title='Measure', value='Value (USD bn)',
                          options=list(MEASURE_COL), width=160)
+    # Smoothing options. Monthly data, so a window of N is an N-month moving average.
+    SMOOTH = {'None': 1, '3mma': 3, '6mma': 6, '12mma': 12}
+
+    smooth_sel = Select(title='Smoothing', value='None',
+                        options=list(SMOOTH), width=110)
     add_btn = Button(label='Add to chart', button_type='primary', width=130, height=31, align='end')
     world_btn = Button(label='World', width=110, height=31, align='end')
     country_sel = Select(title='Country', value='Map',
@@ -176,13 +181,22 @@ def build_auto_panel():
             v = sub.groupby('Date')[s['col']].sum(min_count=1)
         return [float(v.get(d)) if d in v.index else np.nan for d in ALL_DATES]
 
+    # Applied to the assembled series rather than upstream, so it also flows into the table
+    # and the CSV download -- what you see is what you get. min_periods=window means the first
+    # N-1 months are blank rather than a partial average masquerading as a full one.
+    def _smooth(vals):
+        w = SMOOTH[smooth_sel.value]
+        if w == 1:
+            return vals
+        return pd.Series(vals).rolling(w, min_periods=w).mean().tolist()
+
     def rebuild_chart():
         data = {'date': ALL_DATES}
         items = []
         for i in range(MAX_SERIES):
             col = f's{i}'
             if i < len(series):
-                data[col] = _series_values(series[i])
+                data[col] = _smooth(_series_values(series[i]))
                 line_renderers[i].visible = True
                 line_renderers[i].name = series[i]['label']   # $name in the hover tooltip
                 items.append(LegendItem(label={'value': series[i]['label']},
@@ -313,6 +327,7 @@ def build_auto_panel():
     econ_sel.on_change('value', on_econ_change)
     flow_sel.on_change('value', lambda a, o, n: refresh_map())
     cat_sel.on_change('value', lambda a, o, n: refresh_map())
+    smooth_sel.on_change('value', lambda a, o, n: rebuild_chart())
 
     def _sync_bg(fig, src):
         def _cb(attr, old, new):
@@ -342,7 +357,7 @@ def build_auto_panel():
     return column(header,
                   row(econ_sel),
                   column(partner_label, row(country_sel, region_sel, world_btn)),
-                  row(flow_sel, cat_sel, measure_sel, add_btn),
+                  row(flow_sel, cat_sel, measure_sel, smooth_sel, add_btn),
                   row(series_sel, remove_btn, clear_btn),
                   map_instr,
                   row(mp, ln),
