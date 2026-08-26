@@ -15,6 +15,37 @@ So updating the live app is always the same shape:
 
 ---
 
+## The short version — run the notebooks, then one command
+
+```bash
+cd /Users/paul/Documents/ghost/cn_auto_exports
+bash refresh_all.sh
+```
+
+Then GitHub Desktop → **Push origin**. That is the whole process. `refresh_all.sh` does both
+tabs: it rebuilds `auto_long.parquet` *and* `cn_long.parquet`, copies them into the app,
+reports how fresh every reporter is, and commits only if the data actually changed.
+
+It also prints when each source notebook last ran, flagging anything over 40 days old — so a
+notebook you forgot to run shows up before you deploy rather than after.
+
+**Why it exists.** Running only half the process is how the China tab ended up a month out of
+step in August 2026: `cn_hs_8_digit_recent.ipynb` had regenerated `app/data/optimized/`, but
+`build_cn_long.py` was never run, so the two halves of the same tab disagreed. Nothing
+complained, because `git status` showed `optimized/` as modified either way.
+
+**On "commit only if the data changed".** Parquet is not byte-reproducible and the builders are
+not bit-deterministic in floating point — one rebuild of unchanged inputs moved a single
+`usd_per_unit` value by 1e-3 on a number around 1.6e4. So `git diff` can never be trusted to
+mean "the data changed". `fingerprint_app_data.py` hashes the values at six significant figures
+instead, and the script discards a rebuild that produced identical data rather than committing
+noise. Safe to run as often as you like.
+
+The sections below are the manual equivalents, kept for when something breaks or you only want
+one tab.
+
+---
+
 ## Auto trade tab (Japan / Korea / EU / …)
 
 `auto_long.parquet` is a *derived* file. You don't create it — a script combines the country
