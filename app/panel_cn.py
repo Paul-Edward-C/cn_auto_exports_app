@@ -212,6 +212,14 @@ def build_cn_panel():
     # Smoothing options. Monthly data, so a window of N is an N-month moving average.
     SMOOTH = {'None': 1, '3mma': 3, '6mma': 6, '12mma': 12}
 
+    # Start-date options, drawn from the data so each tab offers only years it covers
+    # (China trade begins 2015, auto 1988).
+    START_YEARS = [str(y) for y in [1990, 1995, 2000, 2005, 2010, 2015, 2018, 2020, 2022, 2024]
+                   if ALL_DATES[0].year < y < ALL_DATES[-1].year]
+
+    start_sel = Select(title='From', value='All',
+                       options=['All'] + START_YEARS, width=90)
+
     smooth_sel = Select(title='Smoothing', value='None',
                         options=list(SMOOTH), width=110)
     add_btn = Button(label='Add to chart', button_type='primary', width=130, height=31, align='end')
@@ -255,26 +263,37 @@ def build_cn_panel():
             return vals
         return pd.Series(vals).rolling(w, min_periods=w).mean().tolist()
 
+    def _start_date():
+        v = start_sel.value
+        return ALL_DATES[0] if v == 'All' else pd.Timestamp(f'{v}-01-01')
+
     def rebuild_chart():
-        data = {'date': ALL_DATES}
+        # Smooth over the FULL history, then trim to the window. The other order would leave a
+        # 3mma blank for its first two months at whatever start date is chosen, which looks
+        # like missing data rather than a windowing choice.
+        _keep = [d >= _start_date() for d in ALL_DATES]
+        _dates = [d for d, k in zip(ALL_DATES, _keep) if k]
+        _trim = lambda v: [x for x, k in zip(v, _keep) if k]
+
+        data = {'date': _dates}
         items = []
         for i in range(MAX_SERIES):
             col = f's{i}'
             if i < len(series):
-                data[col] = _smooth(_series_values(series[i]))
+                data[col] = _trim(_smooth(_series_values(series[i])))
                 line_renderers[i].visible = True
                 line_renderers[i].name = series[i]['label']   # $name in the hover tooltip
                 items.append(LegendItem(label={'value': series[i]['label']},
                                         renderers=[line_renderers[i]]))
             else:
-                data[col] = [np.nan] * len(ALL_DATES)
+                data[col] = [np.nan] * len(_dates)
                 line_renderers[i].visible = False
         line_src.data = data
         legend.items = items
         series_sel.options = [s['label'] for s in series]
 
         active = [f's{i}' for i in range(len(series))]
-        tdf = pd.DataFrame({'date': ALL_DATES, **{c: data[c] for c in active}})
+        tdf = pd.DataFrame({'date': _dates, **{c: data[c] for c in active}})
         tdf = tdf.dropna(subset=active, how='all') if active else tdf.iloc[0:0]
 
         def _cds(df):
@@ -394,6 +413,7 @@ def build_cn_panel():
     pcat_sel.on_change('value', lambda a, o, n: refresh_map())
     unit_sel.on_change('value', lambda a, o, n: refresh_map())
     smooth_sel.on_change('value', lambda a, o, n: rebuild_chart())
+    start_sel.on_change('value', lambda a, o, n: rebuild_chart())
 
     def _sync_bg(fig, src):
         def _cb(attr, old, new):
@@ -423,7 +443,7 @@ def build_cn_panel():
     return column(header,
                   report_label,
                   column(partner_label, row(country_sel, region_sel, world_btn)),
-                  row(flow_sel, product_sel, pcat_sel, unit_sel, smooth_sel, add_btn),
+                  row(flow_sel, product_sel, pcat_sel, unit_sel, smooth_sel, start_sel, add_btn),
                   row(series_sel, remove_btn, clear_btn, download_btn),
                   map_instr,
                   row(mp, ln),
