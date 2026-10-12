@@ -23,7 +23,7 @@ FONT = 'Georgia'
 BRAND = '#1f4d3a'          # forest green — primary brand (headings, tabs, table header, accents)
 SAGE = '#6f9b60'           # sage green — secondary accent / hovers / borders
 CREAM = '#f5efe1'          # cream — light text on green, alternating table rows
-PANEL_BG = '#f6f2e9'       # warm cream — chart/map background
+PANEL_BG = '#ffffff'       # chart/map background (was warm cream #f6f2e9)
 MAX_SERIES = 4
 SERIES_COLORS = ['#1f4d3a', '#B7410E', '#6f9b60', '#4682B4']
 CHART_W, CHART_H = 972, 589
@@ -44,9 +44,12 @@ PALETTE = _ramp_palette(_RAMP)
 # horizontally and a little above middle (45% down) so it clears a top-left legend. No text.
 # Embedded as a same-origin data: URI: an external image taints the plot canvas and breaks the
 # Save tool's PNG export. The PNG is the toolsite's own WM constant.
-_WM_FILE = HERE / 'data' / 'watermark.png'
+# On the white background the logo uses watermark_white.png: the toolsite PNG's shape filled with
+# the brand sage (#6f9b60) at 22% over white (a light sage, RGB 223,233,220), drawn at full
+# alpha so its edges fade to white. (watermark.png = the original toolsite PNG.)
+_WM_FILE = HERE / 'data' / 'watermark_white.png'
 WATERMARK_URL = 'data:image/png;base64,' + base64.b64encode(_WM_FILE.read_bytes()).decode('ascii')
-WM_ASPECT, WM_ALPHA = 800 / 460, 0.10
+WM_ASPECT, WM_ALPHA = 800 / 460, 1.0
 
 
 def add_watermark(fig):
