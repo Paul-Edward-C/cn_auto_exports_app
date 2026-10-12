@@ -56,7 +56,7 @@ _PREF_REP = ['Japan', 'Korea', 'China', 'EU', 'India', 'Saudi Arabia', 'UAE',
 _reps = set(_DATA['economy'].unique())
 REPORTERS = [r for r in _PREF_REP if r in _reps] + sorted(_reps - set(_PREF_REP))
 
-_PREFERRED = ['Total', 'ICE', 'HEV', 'PHEV', 'BEV', 'NEV', 'Hybrid',
+_PREFERRED = ['Total', 'ICE over 1000cc', 'ICE under 1000cc', 'HEV', 'PHEV', 'BEV', 'NEV', 'Hybrid',
               'Hybrid and electric', 'Other', 'Including others']
 
 
