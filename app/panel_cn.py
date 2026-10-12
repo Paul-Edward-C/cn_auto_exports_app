@@ -21,7 +21,7 @@ from bokeh.models import (ColumnDataSource, Select, Button, HoverTool, Div,
 from bokeh.plotting import figure
 
 from shared_data import (FONT, BRAND, SAGE, CREAM, PANEL_BG, MAX_SERIES, SERIES_COLORS,
-                         CHART_W, CHART_H, PALETTE, BACKGROUND_URL, WATERMARK,
+                         CHART_W, CHART_H, PALETTE, add_watermark,
                          WORLD_XS, WORLD_YS, WORLD_ISO, WORLD_NAME, N_PATCH,
                          COUNTRY_NAMES_SORTED, ISO_IDX, COUNTRY_ISO,
                          REGION_MEMBER_IDX)
@@ -61,15 +61,7 @@ def build_cn_panel():
                     title_text_color=BRAND, background_fill_alpha=0)
     mp.add_layout(cbar, 'right')
 
-    bg_map_src = ColumnDataSource(dict(
-        url=[BACKGROUND_URL], x=[mp.x_range.start], y=[mp.y_range.start],
-        w=[mp.x_range.end - mp.x_range.start], h=[mp.y_range.end - mp.y_range.start]))
-    mp.image_url(url='url', x='x', y='y', w='w', h='h', source=bg_map_src,
-                 anchor='bottom_left', global_alpha=0.18, level='underlay')
-    mp.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen',
-                        text='www.eastasiaecon.com/cn/#charts',
-                        text_font=FONT, text_font_style='bold', text_font_size='0.875em',
-                        text_color='#556B2F', text_alpha=0.8))
+    add_watermark(mp)
 
     # ---------------------------------------------------------------- line (up to 4 series)
     line_src = ColumnDataSource(dict({'date': ALL_DATES},
@@ -123,13 +115,7 @@ def build_cn_panel():
                     label_text_font=FONT, label_text_font_size='14px', background_fill_alpha=0.7)
     ln.add_layout(legend)
 
-    bg_line_src = ColumnDataSource(dict(url=[BACKGROUND_URL], x=[0], y=[0], w=[1], h=[1]))
-    ln.image_url(url='url', x='x', y='y', w='w', h='h', source=bg_line_src,
-                 anchor='bottom_left', global_alpha=0.12, level='underlay')
-    ln.add_layout(Label(x=10, y=10, x_units='screen', y_units='screen',
-                        text='www.eastasiaecon.com/cn/#charts',
-                        text_font=FONT, text_font_style='bold', text_font_size='0.875em',
-                        text_color='#556B2F', text_alpha=0.8))
+    add_watermark(ln)
 
     # ---------------------------------------------------------------- data table + CSV
     DATE_WIDTH, VAL_WIDTH = 120, 260
@@ -415,18 +401,6 @@ def build_cn_panel():
     smooth_sel.on_change('value', lambda a, o, n: rebuild_chart())
     start_sel.on_change('value', lambda a, o, n: rebuild_chart())
 
-    def _sync_bg(fig, src):
-        def _cb(attr, old, new):
-            src.data.update(x=[fig.x_range.start], y=[fig.y_range.start],
-                            w=[fig.x_range.end - fig.x_range.start],
-                            h=[fig.y_range.end - fig.y_range.start])
-        return _cb
-
-    for _fig, _src in ((mp, bg_map_src), (ln, bg_line_src)):
-        _cb = _sync_bg(_fig, _src)
-        for _rng in (_fig.x_range, _fig.y_range):
-            _rng.on_change('start', _cb)
-            _rng.on_change('end', _cb)
 
     # ---------------------------------------------------------------- layout
     header = Div(text='<h2 style="font-family:Georgia;color:#556B2F;border-bottom:2px solid '

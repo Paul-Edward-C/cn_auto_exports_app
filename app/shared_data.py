@@ -39,15 +39,39 @@ def _ramp_palette(stops, n=256):
 
 
 PALETTE = _ramp_palette(_RAMP)
-# The chart background watermark. Embedded as a same-origin data: URI (from the local file)
-# rather than an external https URL: an external image taints the plot canvas, so the browser
-# blocks the Save tool's PNG export ("Enter filename" appears but nothing downloads). A data:
-# URI is same-origin and never taints, so Save works. Refresh with:
-#   curl -o app/data/background.jpeg <image-url>
-_BG_FILE = HERE / 'data' / 'background.jpeg'
-BACKGROUND_URL = ('data:image/jpeg;base64,'
-                  + base64.b64encode(_BG_FILE.read_bytes()).decode('ascii'))
-WATERMARK = 'www.eastasiaecon.com'
+# The chart watermark, matching the toolsite charts (ghost/toolsite): the brand lockup PNG
+# (800x460) at 10% alpha across 90% of the plot frame (capped at 72% of its height), centred
+# horizontally and a little above middle (45% down) so it clears a top-left legend. No text.
+# Embedded as a same-origin data: URI: an external image taints the plot canvas and breaks the
+# Save tool's PNG export. The PNG is the toolsite's own WM constant.
+_WM_FILE = HERE / 'data' / 'watermark.png'
+WATERMARK_URL = 'data:image/png;base64,' + base64.b64encode(_WM_FILE.read_bytes()).decode('ascii')
+WM_ASPECT, WM_ALPHA = 800 / 460, 0.10
+
+
+def add_watermark(fig):
+    """Place the brand watermark behind fig's data, toolsite-style. Geometry is in screen
+    terms, so it is recomputed in the browser whenever the ranges or frame size change."""
+    from bokeh.models import ColumnDataSource, CustomJS
+    src = ColumnDataSource(dict(url=[WATERMARK_URL], x=[0], y=[0], w=[0], h=[0]))
+    fig.image_url(url='url', x='x', y='y', w='w', h='h', source=src, anchor='center',
+                  global_alpha=WM_ALPHA, level='underlay')
+    cb = CustomJS(args=dict(fig=fig, src=src, aspect=WM_ASPECT), code="""
+        const xr = fig.x_range, yr = fig.y_range;
+        const fw = fig.inner_width, fh = fig.inner_height;
+        if (!fw || !fh || xr.start == null || yr.start == null) return;
+        let ww = fw * 0.90, wh = ww / aspect;
+        if (wh > fh * 0.72) { wh = fh * 0.72; ww = wh * aspect; }
+        const sx = (xr.end - xr.start) / fw, sy = (yr.end - yr.start) / fh;
+        src.data = {url: src.data.url, x: [xr.start + fw / 2 * sx], y: [yr.end - fh * 0.45 * sy],
+                    w: [ww * sx], h: [wh * sy]};
+    """)
+    for rng in (fig.x_range, fig.y_range):
+        rng.js_on_change('start', cb)
+        rng.js_on_change('end', cb)
+    fig.js_on_change('inner_width', cb)
+    fig.js_on_change('inner_height', cb)
+    return src
 
 # ---------------------------------------------------------------- world geometry (shared)
 _WORLD = pd.read_parquet(HERE / 'data' / 'world_patches.parquet')
